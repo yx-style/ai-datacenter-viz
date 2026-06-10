@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 数据中心拆解 · 交互式三维框架</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --gold: #d4a017;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; overflow: hidden; }
+  #canvas-wrap { position: fixed; inset: 0; }
+  canvas { display: block; }
+
+  /* 顶栏 */
+  #topbar {
+    position: fixed; top: 0; left: 0; right: 0; height: 52px;
+    display: flex; align-items: center; gap: 16px; padding: 0 20px;
+    background: rgba(13,17,23,.85); backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border); z-index: 10;
+  }
+  #topbar h1 { font-size: 15px; font-weight: 600; white-space: nowrap; }
+  #breadcrumb { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); flex: 1; min-width: 0; }
+  #breadcrumb .crumb { cursor: pointer; padding: 3px 8px; border-radius: 6px; white-space: nowrap; }
+  #breadcrumb .crumb:hover { background: #21262d; color: var(--text); }
+  #breadcrumb .crumb.current { color: var(--accent); cursor: default; }
+  #breadcrumb .sep { color: #484f58; }
+
+  /* 机柜方案切换 */
+  #rack-switcher { display: flex; gap: 6px; }
+  #rack-switcher button {
+    background: #21262d; color: var(--muted); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 10px; font-size: 12px; cursor: pointer; white-space: nowrap;
+  }
+  #rack-switcher button:hover { color: var(--text); border-color: #8b949e; }
+  #rack-switcher button.active { background: #1f3a5f; color: var(--accent); border-color: var(--accent); }
+
+  /* 信息侧栏 */
+  #panel {
+    position: fixed; top: 64px; right: 12px; bottom: 12px; width: 360px;
+    background: rgba(22,27,34,.92); backdrop-filter: blur(10px);
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 18px; overflow-y: auto; z-index: 9;
+    transition: transform .25s ease, opacity .25s ease;
+  }
+  #panel.hidden { transform: translateX(390px); opacity: 0; pointer-events: none; }
+  #panel .cat { font-size: 11px; color: var(--gold); letter-spacing: 1px; margin-bottom: 4px; }
+  #panel h2 { font-size: 18px; margin-bottom: 10px; line-height: 1.35; }
+  #panel .value-box {
+    background: #0d1117; border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; margin: 10px 0; display: flex; gap: 14px; flex-wrap: wrap;
+  }
+  #panel .value-box .v { display: flex; flex-direction: column; }
+  #panel .value-box .v b { font-size: 17px; color: var(--accent); font-variant-numeric: tabular-nums; }
+  #panel .value-box .v span { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  #panel .vnote { font-size: 11px; color: var(--muted); margin: -4px 0 10px; line-height: 1.5; }
+  #panel .sec { font-size: 11px; color: var(--gold); letter-spacing: 1px; margin: 14px 0 5px; }
+  #panel p { font-size: 13px; line-height: 1.7; color: #c9d1d9; }
+  #panel .players { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  #panel .players span {
+    background: #21262d; border: 1px solid var(--border); border-radius: 20px;
+    padding: 3px 10px; font-size: 12px; color: #c9d1d9;
+  }
+  #panel .conf { font-size: 11px; color: var(--muted); margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border); line-height: 1.6; }
+  #panel .enter-hint {
+    margin-top: 12px; padding: 9px 12px; background: #1f3a5f; border-radius: 8px;
+    font-size: 13px; color: var(--accent); cursor: pointer; text-align: center;
+  }
+  #panel .enter-hint:hover { background: #264a78; }
+  #panel table { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 12px; }
+  #panel td { padding: 4px 2px; border-bottom: 1px solid #21262d; color: #c9d1d9; }
+  #panel td:nth-child(2), #panel td:nth-child(3) { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+  #panel tr.clickable { cursor: pointer; }
+  #panel tr.clickable:hover td { color: var(--accent); }
+
+  /* 左下角提示 */
+  #hint {
+    position: fixed; left: 16px; bottom: 14px; z-index: 8;
+    font-size: 12px; color: var(--muted); line-height: 1.7;
+    background: rgba(13,17,23,.7); padding: 8px 12px; border-radius: 8px;
+  }
+  #hint b { color: var(--text); font-weight: 600; }
+
+  /* hover 标签 */
+  #tooltip {
+    position: fixed; pointer-events: none; z-index: 20;
+    background: rgba(22,27,34,.95); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 10px; font-size: 12px; display: none;
+  }
+  #tooltip .tv { color: var(--accent); margin-left: 8px; font-variant-numeric: tabular-nums; }
+
+  /* 场景说明（屏幕上方固定，替代 3D 大字标签） */
+  #scene-caption {
+    position: fixed; top: 60px; left: 50%; transform: translateX(-50%);
+    z-index: 8; max-width: 70vw; text-align: center;
+    background: rgba(13,17,23,.75); backdrop-filter: blur(6px);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 7px 18px; font-size: 13px; color: #c9d1d9; line-height: 1.6;
+  }
+  #scene-caption:empty { display: none; }
+  #scene-caption .warn { color: var(--gold); }
+
+  /* 返回按钮 */
+  #back-btn {
+    position: fixed; left: 16px; top: 64px; z-index: 9;
+    background: #21262d; border: 1px solid var(--border); color: var(--text);
+    border-radius: 8px; padding: 8px 16px; font-size: 13px; cursor: pointer; display: none;
+  }
+  #back-btn:hover { border-color: var(--accent); color: var(--accent); }
+</style>
+</head>
+<body>
+<div id="canvas-wrap"></div>
+
+<div id="topbar">
+  <h1>AI 数据中心拆解</h1>
+  <div id="breadcrumb"></div>
+  <div id="rack-switcher"></div>
+</div>
+
+<button id="back-btn">← 返回上一层</button>
+
+<div id="scene-caption"></div>
+
+<div id="panel" class="hidden"></div>
+
+<div id="hint">
+  <b>拖拽</b> 旋转 · <b>滚轮</b> 缩放 · <b>右键拖拽</b> 平移<br>
+  <b>点击</b> 高亮部件查看信息 · 蓝色脉冲 = 可进入下一层
+</div>
+
+<div id="tooltip"></div>
+
+<script type="importmap">
+{ "imports": { "three": "./lib/three.module.js", "three/addons/": "./lib/addons/" } }
+</script>
+<script type="module" src="./main.js"></script>
+</body>
+</html>

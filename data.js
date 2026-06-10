@@ -1,0 +1,396 @@
+// ============================================================
+// AI 数据中心可视化 — 数据层
+// 所有数字、文案、玩家信息都在这个文件里，后续更新只改这里。
+// 数据基准：Bernstein 2025-10-27《AI Value Chain: How much does
+// a GW of data center capacity actually cost》GB200/NVL72 口径
+// 置信度: A=报告表格原文  B=报告正文  C=公开常识/待校准
+// ============================================================
+
+export const META = {
+  source: 'Bernstein 2025-10-27 (GB200/NVL72 口径)',
+  dcCapexPerRackK: 5943,      // 全口径 $K/机柜
+  dcCapexPerGWB: 35.2,        // $B/GW
+  racksPerGW: 5929,
+  rackPowerKW: 132,
+  totalPowerPerRackKW: 169,
+};
+
+// ------------------------------------------------------------
+// 数据中心全景层（园区）：每 GW capex 拆分
+// ------------------------------------------------------------
+export const CAMPUS_ZONES = [
+  {
+    id: 'whitespace',
+    name: '机房白区（IT 机柜）',
+    perRackK: 3413, bGW: 20.2, pct: 57.4, conf: 'A',
+    desc: '放服务器机柜的主机房。AI 数据中心 capex 的大头（57%）都在机柜里面，点进去看机柜内部拆分。',
+    role: '承载全部计算、网络、存储设备',
+    players: ['（见机柜内部各部件）'],
+    action: 'enterRack',
+  },
+  {
+    id: 'power-distribution',
+    name: '配电系统',
+    perRackK: 587, bGW: 3.5, pct: 9.9, conf: 'A',
+    desc: '把市电从中压一路降压、分配到每个机柜。大头是变压器（5.1%）和中低压开关柜（1.9%），还有母线槽、电缆、静态切换开关等。',
+    role: '电从电网到机柜的"最后一公里"',
+    players: ['伊顿', '施耐德', 'Vertiv', 'ABB', '台达', '金盘科技(C)'],
+    children: [
+      { name: '变压器', perRackK: 306, pct: 5.1 },
+      { name: '中低压开关柜', perRackK: 110, pct: 1.9 },
+      { name: '电缆', perRackK: 93, pct: 1.6 },
+      { name: '母线槽 Busway', perRackK: 50, pct: 0.8 },
+      { name: '3P 变压器型 PDU', perRackK: 19, pct: 0.3 },
+      { name: '静态切换开关等', perRackK: 10, pct: 0.1 },
+    ],
+  },
+  {
+    id: 'backup-power',
+    name: '备用电源（UPS + BBU）',
+    perRackK: 272, bGW: 1.6, pct: 4.6, conf: 'A',
+    desc: '市电断了之后、柴发启动之前的几十秒由 UPS/电池顶上。UPS 硬件占 4.3%，电池备份单元 BBU 占 0.2%。Rubin 时代 BBU/超级电容需求会大增。',
+    role: '断电瞬间的无缝衔接',
+    players: ['伊顿', '施耐德', 'Vertiv', '台达'],
+    children: [
+      { name: 'UPS 硬件', perRackK: 258, pct: 4.3 },
+      { name: '电池备份单元 BBU', perRackK: 14, pct: 0.2 },
+    ],
+  },
+  {
+    id: 'generators',
+    name: '柴油/燃气发电机',
+    perRackK: 365, bGW: 2.2, pct: 6.1, conf: 'A',
+    desc: '机电设备里最大的单项（6.1%）。长时间停电时的冗余电源，通常是一排集装箱式柴发/燃气轮机。注意：电网级燃气轮机（GE Vernova、西门子能源、三菱重工）不在数据中心 capex 口径内，但是当前最大的产业瓶颈。',
+    role: '长时间断电的兜底冗余',
+    players: ['卡特彼勒', '康明斯', '劳斯莱斯 MTU', '科勒', 'Generac'],
+  },
+  {
+    id: 'thermal',
+    name: '热管理（机房级）',
+    perRackK: 211, bGW: 1.3, pct: 3.6, conf: 'A',
+    desc: '机房级散热：风冷空调（1.9%）+ 液冷外部设施 CDU/冷却塔/干冷器（0.7%）+ 配套（1.0%）。目前风冷液冷并存，趋势是持续向液冷迁移。机柜内部的液冷冷板另算在机柜里。',
+    role: '把机柜排出的热量搬到大气里',
+    players: ['Vertiv', 'Johnson Controls(C)', '英维克(C)', '申菱环境(C)', '台达'],
+    children: [
+      { name: '风冷', perRackK: 110, pct: 1.9 },
+      { name: '液冷（机房侧）', perRackK: 44, pct: 0.7 },
+      { name: '配套设施', perRackK: 57, pct: 1.0 },
+    ],
+  },
+  {
+    id: 'other-infra',
+    name: '其他物理基础设施',
+    perRackK: 459, bGW: 2.7, pct: 7.8, conf: 'A',
+    desc: '管道/水泵/机器人等杂项（5.4%）、DCIM 软件与传感器（0.9%）、物理安防（0.5%）、消防（0.3%）、KVM、天花板地板、照明等。',
+    role: '机房正常运转的各种配套',
+    players: ['分散，无集中玩家'],
+    children: [
+      { name: '管道、泵、机器人等', perRackK: 319, pct: 5.4 },
+      { name: 'DCIM 软件与传感器', perRackK: 55, pct: 0.9 },
+      { name: '物理安防', perRackK: 31, pct: 0.5 },
+      { name: '消防', perRackK: 18, pct: 0.3 },
+      { name: 'KVM/天花地板/照明', perRackK: 36, pct: 0.6 },
+    ],
+  },
+  {
+    id: 'land',
+    name: '土地与建筑',
+    perRackK: 636, bGW: 3.8, pct: 10.7, conf: 'A',
+    desc: '地皮和厂房本身，占 10.7%。折旧周期最长（10-25 年），所以从真实经济成本（TCO）看，权重比现金 capex 显示的更低。',
+    role: '物理载体',
+    players: ['数据中心开发商/REITs：Equinix、Digital Realty、万国数据(C)'],
+  },
+];
+
+// ------------------------------------------------------------
+// 机柜方案（可切换）
+// ------------------------------------------------------------
+export const RACK_TYPES = {
+  gb200: {
+    id: 'gb200',
+    name: 'NVIDIA GB200 NVL72',
+    status: 'detailed',
+    rackPriceK: 3413, pctOfDC: 57.4, conf: 'A',
+    tagline: '72 颗 Blackwell GPU + 36 颗 Grace CPU，单柜 132kW，全液冷。当前 AI 训练机柜的事实标准，本框架的数据主线。',
+    spec: '18 个计算托盘（每个 2 CPU + 4 GPU）+ 9 个 NVSwitch 托盘 + 电源架；柜内 NVLink 铜缆背板互联',
+  },
+  gb300: {
+    id: 'gb300',
+    name: 'NVIDIA GB300 NVL72',
+    status: 'brief',
+    rackPriceK: 3900, pctOfDC: null, conf: 'C',
+    tagline: 'GB200 的升级款（B300 GPU，HBM3e 288GB）。电源/BBU 规格与 GB200 相近，功率密度提升有限；BBU 渗透率提升使单柜电源价值量到约 $46K（Bernstein 图7）。整柜价格为估算值，待你的材料校准。',
+    spec: '结构与 GB200 NVL72 基本一致',
+  },
+  rubin: {
+    id: 'rubin',
+    name: 'NVIDIA Vera Rubin NVL144',
+    status: 'brief',
+    rackPriceK: null, pctOfDC: null, conf: 'C',
+    tagline: '2026 下半年起的下一代平台：Vera CPU + Rubin GPU，机柜功率密度进一步上升。确定性最强的变化在供电——Bernstein 测算柜内电源价值量 VR200 是 GB200 的 2-3 倍（$80-120K/柜），2027 年 Rubin Ultra 配合 800V HVDC 达到 7-8 倍；BBU 和超级电容需求大增。英伟达说的 $50-60B/GW 更接近这一代的口径。整柜 BOM 待材料补充。',
+    spec: '结构与 NVL72 同族（计算托盘 + 交换托盘 + 电源架），互联和供电规格升级；第一代 800V HVDC 预计 2H26 部署',
+  },
+  tpu: {
+    id: 'tpu',
+    name: 'Google TPU 机柜',
+    status: 'framework',
+    rackPriceK: null, pctOfDC: null, conf: 'C',
+    tagline: '自研 ASIC 路线代表。TPU 由 Google 设计、博通（后续部分联发科）做后端与 IO，代工台积电。机柜间用 OCS 光交换（Palomar）而非电交换机组网。ASIC 毛利率约 50%（vs 英伟达 70%），同样 capex 能买到约 19% 更多算力（Bernstein 测算）。具体 BOM 数字待补充。',
+    spec: '示意结构：TPU 托盘 + ICI 互联 + OCS 光路交换。等你给我 TPU pod 拆分材料后细化。',
+  },
+  ascend: {
+    id: 'ascend',
+    name: '华为昇腾 CloudMatrix 384',
+    status: 'framework',
+    rackPriceK: null, pctOfDC: null, conf: 'C',
+    tagline: '国产链代表。384 颗昇腾 910C，由 16 个机柜组成一个超节点（12 计算柜 + 4 交换柜），全光互联换规模——用更多芯片和更高功耗对标 NVL72。公开估算整系统约 $8M 级别，数字待校准。',
+    spec: '示意结构：16 柜超节点。等国产链拆分材料后细化。',
+  },
+  cpu: {
+    id: 'cpu',
+    name: '通用 CPU 服务器机柜（对照组）',
+    status: 'framework',
+    rackPriceK: 400, pctOfDC: null, conf: 'C',
+    tagline: '传统数据中心机柜：约 20 台 2U 双路 x86 服务器，单柜 10-15kW 风冷，整柜约 $30-50 万。对照可见：一个 NVL72 AI 机柜 ≈ 8-10 个传统机柜的价值量，功率密度 ≈ 10 倍。',
+    spec: '约 20× 2U 双路服务器 + TOR 交换机',
+  },
+};
+
+// ------------------------------------------------------------
+// 部件库：机柜/托盘层所有可点击物体的信息
+// value 口径：perRackK = $K/整柜, bGW = $B/GW, pct = 占数据中心全口径 capex %
+// ------------------------------------------------------------
+export const COMPONENTS = {
+  // ===== 机柜层 =====
+  'compute-tray': {
+    name: '计算托盘（Compute Tray）',
+    cat: '机柜单元',
+    desc: '1U 高的"刀片"，每个装 2 颗 Grace CPU + 4 颗 Blackwell GPU（即 2 个 GB200 超级芯片），全柜 18 个。这是价值量最集中的地方——点击进入托盘内部。',
+    role: '算力的物理载体',
+    shape: '1U 抽屉式金属托盘，正面是接口和拉手，内部主板上盖着液冷冷板',
+    value: { perRackK: 2475, bGW: 14.7, pct: 41.6 },
+    valueNote: '计算部分合计（CPU+GPU 含毛利）',
+    players: ['ODM 组装：鸿海、广达、纬创', '品牌：Dell、HPE、SMCI'],
+    conf: 'A',
+    action: 'enterTray',
+  },
+  'nvswitch-tray': {
+    name: 'NVSwitch 交换托盘',
+    cat: '机柜单元',
+    desc: '柜内 9 个，每个含 2 颗 NVSwitch 芯片，把 72 颗 GPU 用 NVLink 连成一个"大 GPU"（scale-up 互联）。和后面的铜缆背板配合工作。',
+    role: 'GPU 之间的柜内高速互联',
+    shape: '1U 托盘，芯片在中间，背面是密集的背板连接器',
+    value: { perRackK: 184, bGW: 1.1, pct: 3.1 },
+    valueNote: '交换机合计（芯片+设计+整机毛利）；NVL72 内为 NVSwitch',
+    players: ['NVIDIA（芯片与设计）', '代工：台积电'],
+    conf: 'A',
+    action: 'enterSwitchTray',
+  },
+  'power-shelf': {
+    name: '电源架（Power Shelf）',
+    cat: '机柜单元',
+    desc: '把数据中心送来的交流电整流成 48V/800V 直流，通过母排供给全柜。GB200 单柜约 $34K；到 Rubin Ultra（800V HVDC）时代，柜内电源价值量会增至 7-8 倍——这是确定性最强的增量环节之一。',
+    role: 'AC→DC 整流与柜内供电',
+    shape: '1U 金属盒，里面是多个可热插拔的电源模块（PSU）',
+    value: { perRackK: 51, bGW: 0.3, pct: 0.9 },
+    valueNote: '柜内电源合计（电源架+配电节点）；VR200 预计 $80-120K，Rubin Ultra 7-8 倍',
+    players: ['台达', '光宝', 'Vicor', '麦格米特(C)', '欧陆通(C)'],
+    conf: 'A',
+  },
+  'manifold': {
+    name: '液冷歧管 + 冷板系统',
+    cat: '机柜单元',
+    desc: '柜内液冷回路：两根垂直歧管（蓝色进水/红色回水）通过快接头（QD）连到每个托盘的冷板，把芯片热量带到机房侧 CDU。NVL72 是全液冷，没有风扇散热 GPU。',
+    role: '芯片级散热',
+    shape: '机柜后侧两根金属管 + 每托盘的盖板式冷板和软管',
+    value: { perRackK: 51, bGW: 0.3, pct: 0.9 },
+    valueNote: '柜内液冷部分；机房侧液冷设施另算在园区热管理里',
+    players: ['Vertiv', '台达', '奇鋐(C)', '双鸿(C)', '英维克(C)', 'CoolerMaster(C)'],
+    conf: 'A',
+  },
+  'copper-backplane': {
+    name: 'NVLink 铜缆背板',
+    cat: '机柜单元',
+    desc: '柜子后部的"电缆墙"：5000+ 根同轴铜缆把 18 个计算托盘和 9 个交换托盘全部直连。短距离（<1m）用铜比光便宜且不耗电，这是 NVL72 设计的精髓。铜缆 2.1% + 背板连接器 1.7%，合计约 3.8% 的 capex。',
+    role: '柜内 scale-up 互联的物理介质',
+    shape: '机柜背面密密麻麻的黑色缆束和金属连接器矩阵',
+    value: { perRackK: 225, bGW: 1.3, pct: 3.8 },
+    valueNote: '铜缆 $123K + 背板连接器 $102K',
+    players: ['安费诺 Amphenol', '立讯精密(C)', 'TE(C)', '沃尔核材/瑞可达(C)'],
+    conf: 'A',
+  },
+  'storage-tray': {
+    name: '存储（示意位）',
+    cat: '机柜单元',
+    desc: '注意：NVL72 柜内基本不放存储，存储在独立的存储服务器/机柜里（这里画在柜内只是示意）。典型一个机柜配约 2PB，按 HDD 算只要 ~$20K，占比极小（~1.4% 含其他）。这解释了为什么存储厂商在 AI capex 里存在感低——但间接受益于企业存储更新周期。',
+    role: '训练数据与 checkpoint 存放',
+    shape: '独立的存储服务器机柜（JBOD/全闪）',
+    value: { perRackK: 85, bGW: 0.5, pct: 1.4 },
+    valueNote: '"存储与其他"合计',
+    players: ['HDD：希捷、西数', 'NAND/SSD：三星、SK海力士、美光、闪迪', '系统：Dell、Pure(C)'],
+    conf: 'A',
+  },
+  'rack-frame': {
+    name: '机柜框架与机械件',
+    cat: '机柜单元',
+    desc: '柜体钢结构、滑轨、母排、托盘底盘等。单看不值钱，但 ODM 整机组装的入口。',
+    role: '结构件',
+    shape: '约 0.6m 宽 × 2.3m 高的 19/21 英寸标准柜',
+    value: { perRackK: 34, bGW: 0.2, pct: 0.6 },
+    valueNote: '电源传输/托盘底盘项',
+    players: ['鸿海', '广达', '纬创', '奇鋐(C)'],
+    conf: 'A',
+  },
+
+  // ===== 机柜旁的幽灵柜 =====
+  'network-rack': {
+    name: '网络机柜（scale-out）',
+    cat: '配套机柜',
+    desc: '柜外组网：把几千个机柜连成集群的 InfiniBand/以太网交换机，加上光模块、NIC、DPU。这部分分散但合计可观：DPU 3.2% + 交换机 3.1% + NIC 1.7% + 光模块 0.9%。共封装光学（CPO）普及会改变这里的格局。',
+    role: '机柜之间、集群层面的互联',
+    shape: '独立机柜，装满 1-2U 交换机，前面板全是光模块端口',
+    value: { perRackK: 525, bGW: 3.1, pct: 8.8 },
+    valueNote: 'DPU $188K + 交换机 $184K + NIC $102K + 光模块 $51K（按每计算柜分摊）',
+    players: ['交换机：NVIDIA、Arista、思科(C)', '交换芯片：博通', '光模块：中际旭创、新易盛、Coherent(C)', 'DPU/NIC：NVIDIA'],
+    conf: 'A',
+  },
+
+  // ===== 托盘层（计算托盘内部）=====
+  'gpu': {
+    name: 'GPU（Blackwell B200）',
+    cat: '芯片',
+    desc: '整个 AI 数据中心价值量的绝对核心：GPU 合计占全口径 capex 的 38.8%，其中英伟达毛利就占 29.1%——比整个机电设备（33%）还多，是单一最大"科目"。每颗 B200 含两个 reticle 极限 die + 8 颗 HBM3e，全柜 72 颗。',
+    role: '训练/推理的算力本体',
+    shape: '约名片大小的陶瓷基板封装，中间两块大 die，四周 8 颗 HBM，上面压着液冷冷板',
+    value: { perRackK: 2304, bGW: 13.7, pct: 38.8 },
+    valueNote: '≈$32K/颗（含 HBM 与毛利）。拆：英伟达毛利 29.1% + HBM 3.2% + GPU 裸片 2.7% + 封装/基板等 3.8%',
+    players: ['设计：NVIDIA（替代：AMD MI 系列）', '代工：台积电（4NP + CoWoS 封装）'],
+    conf: 'A',
+  },
+  'hbm': {
+    name: 'HBM（高带宽内存）',
+    cat: '芯片',
+    desc: '堆叠式 DRAM，紧贴 GPU die 封装在同一基板上，提供 TB/s 级带宽。每颗 B200 配 8 stack HBM3e（192GB）。HBM 占数据中心 capex 3.2%（$1.1B/GW），是存储三巨头的主战场，也是当前 DRAM 涨价的核心驱动。',
+    role: 'GPU 的"工作内存"，带宽决定算力发挥',
+    shape: 'GPU 大 die 旁边的 8 颗小方块，每颗是 8-12 层 DRAM 垂直堆叠',
+    value: { perRackK: 192, bGW: 1.1, pct: 3.2 },
+    valueNote: '≈$2.7K/GPU 的 HBM 含量',
+    players: ['SK海力士（主供）', '美光', '三星'],
+    conf: 'A',
+  },
+  'cpu': {
+    name: 'CPU（Grace）',
+    cat: '芯片',
+    desc: 'Arm 架构服务器 CPU，每 2 颗 GPU 配 1 颗，负责数据预处理、调度和内存扩展（每颗带 480GB LPDDR5X）。CPU 占 capex 约 2.9%——和交换机一个量级，但因为和 GPU 捆绑成超级芯片卖，常被视为"搭售件"。',
+    role: 'GPU 的管家：喂数据、跑系统',
+    shape: '和 GPU 封装在同一块超级芯片基板上的另一颗大芯片，旁边一圈 LPDDR 内存颗粒',
+    value: { perRackK: 171, bGW: 1.0, pct: 2.9 },
+    valueNote: '≈$4.8K/颗（硅片 $85K + 设计毛利 $85K 每柜）',
+    players: ['NVIDIA Grace（Arm）', 'x86 替代：Intel、AMD'],
+    conf: 'A',
+  },
+  'nic': {
+    name: '网卡 NIC（ConnectX）',
+    cat: '芯片/板卡',
+    desc: '每个计算托盘配多张 800G 网卡（ConnectX-7/8），负责托盘对外的 scale-out 通信（连到柜外交换机）。占 capex 约 1.7%。',
+    role: '托盘对外的网络出口',
+    shape: '托盘前部的 mezzanine 小卡，对应前面板的 OSFP 笼子',
+    value: { perRackK: 102, bGW: 0.6, pct: 1.7 },
+    valueNote: '',
+    players: ['NVIDIA（ConnectX）', '博通(C)'],
+    conf: 'A',
+  },
+  'dpu': {
+    name: 'DPU / 网络加速（BlueField）',
+    cat: '芯片/板卡',
+    desc: '数据处理器：把网络协议、存储访问、安全等任务从 CPU/GPU 卸载出来。占 capex 约 3.2%，比很多人以为的大。',
+    role: '网络/存储/安全任务的卸载引擎',
+    shape: '类似网卡的板卡，上面是带 Arm 核的大芯片',
+    value: { perRackK: 188, bGW: 1.1, pct: 3.2 },
+    valueNote: 'DPU/网络加速合计',
+    players: ['NVIDIA（BlueField）', 'AWS Nitro（自用）(C)', '博通(C)'],
+    conf: 'A',
+  },
+  'coldplate': {
+    name: '液冷冷板',
+    cat: '散热',
+    desc: '铜制板块直接压在 GPU/CPU 上，内部刻微通道，冷却液流过带走热量。每个托盘的冷板通过快接头连到机柜歧管。',
+    role: '芯片表面的直接换热器',
+    shape: '覆盖芯片的金属板 + 两根进出水软管',
+    value: { perRackK: null, bGW: null, pct: null },
+    valueNote: '计入柜内液冷 $51K（0.9%）',
+    players: ['奇鋐', '双鸿', 'CoolerMaster', 'Vertiv', '飞荣达(C)'],
+    conf: 'B',
+  },
+  'pcb': {
+    name: '主板 PCB + 封装基板',
+    cat: '板材',
+    desc: '托盘主板（Bianca board）是高层数 HDI 板；GPU 下面还有 ABF 载板。这部分归在"其他 GPU 成本"（封装基板、PCB、散热器、组装合计 3.8%）。',
+    role: '所有芯片的物理连接层',
+    shape: '绿色/黑色大板子，芯片和供电元件都焊在上面',
+    value: { perRackK: 225, bGW: 1.3, pct: 3.8 },
+    valueNote: '"其他 GPU 成本"合计（基板+PCB+散热器+组装）',
+    players: ['载板：欣兴、Ibiden(C)', 'PCB：金像电、沪电(C)', '组装：鸿海、广达'],
+    conf: 'A',
+  },
+  'mlcc': {
+    name: 'MLCC 与被动元件',
+    cat: '元件',
+    desc: '主板和封装基板上成千上万颗陶瓷电容，给芯片瞬时大电流供电做缓冲。单颗便宜量大，AI 板卡用量是普通服务器数倍。Bernstein 表里没单列——具体价值量待你给材料补充。',
+    role: '供电质量的"毛细血管"',
+    shape: '芯片周围密密麻麻的小黑点/小方块',
+    value: { perRackK: null, bGW: null, pct: null },
+    valueNote: '待补充（不在 Bernstein 拆分表内）',
+    players: ['村田', '三星电机', '国巨', '太诱(C)', '风华高科(C)'],
+    conf: 'C',
+  },
+  'osfp': {
+    name: '前面板接口 / 光模块笼',
+    cat: '接口',
+    desc: '托盘前面板的 OSFP 笼子，插 800G 光模块（连柜外交换机时）或有源铜缆。光模块本身占 capex 约 0.9%，CPO（共封装光学）普及后形态会变。',
+    role: 'scale-out 网络的物理端口',
+    shape: '前面板一排金属笼子 + 插进去的光模块（带拉环）',
+    value: { perRackK: 51, bGW: 0.3, pct: 0.9 },
+    valueNote: '光模块（Transceivers）项',
+    players: ['中际旭创', '新易盛', 'Coherent', '天孚通信（器件）(C)', 'Fabrinet(C)'],
+    conf: 'A',
+  },
+
+  // ===== NVSwitch 托盘内部 =====
+  'nvswitch-chip': {
+    name: 'NVSwitch 芯片',
+    cat: '芯片',
+    desc: '每托盘 2 颗，每颗提供 72 个 NVLink 端口。9 个托盘 18 颗芯片构成全柜 72 GPU 的无阻塞全互联。交换芯片毛利率高（~80%），所以交换环节在利润池里的分量比 capex 占比更大。',
+    role: 'NVLink 流量的十字路口',
+    shape: '托盘中央两颗大芯片，各自压着冷板',
+    value: { perRackK: 66, bGW: 0.4, pct: 1.1 },
+    valueNote: '交换芯片 $13K + 设计毛利 $53K；整机毛利另计 $118K',
+    players: ['NVIDIA', '代工：台积电', '对照：博通 Tomahawk（以太网路线）'],
+    conf: 'A',
+  },
+  'backplane-connector': {
+    name: '背板连接器',
+    cat: '接口',
+    desc: '托盘背面与铜缆背板对接的高密度连接器，占 capex 约 1.7%。安费诺是这个环节的代表玩家。',
+    role: '托盘与背板缆线的对接口',
+    shape: '托盘后缘一排金属高密度插座',
+    value: { perRackK: 102, bGW: 0.6, pct: 1.7 },
+    valueNote: '',
+    players: ['安费诺 Amphenol', 'TE(C)', '立讯精密(C)'],
+    conf: 'A',
+  },
+};
+
+// 机柜层快速汇总条（侧栏机柜总览用）
+export const RACK_SUMMARY_GB200 = [
+  { id: 'gpu', name: 'GPU（含HBM与毛利）', perRackK: 2304, pct: 38.8 },
+  { id: 'cpu', name: 'CPU', perRackK: 171, pct: 2.9 },
+  { id: 'nvswitch-tray', name: '交换机（NVSwitch）', perRackK: 184, pct: 3.1 },
+  { id: 'copper-backplane', name: '铜缆+背板连接器', perRackK: 225, pct: 3.8 },
+  { id: 'dpu', name: 'DPU/网络加速', perRackK: 188, pct: 3.2 },
+  { id: 'nic', name: 'NIC 网卡', perRackK: 102, pct: 1.7 },
+  { id: 'osfp', name: '光模块', perRackK: 51, pct: 0.9 },
+  { id: 'power-shelf', name: '柜内电源', perRackK: 51, pct: 0.9 },
+  { id: 'manifold', name: '柜内液冷', perRackK: 51, pct: 0.9 },
+  { id: 'storage-tray', name: '存储与其他', perRackK: 85, pct: 1.4 },
+];
