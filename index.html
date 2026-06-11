@@ -51,6 +51,13 @@
     transition: transform .25s ease, opacity .25s ease;
   }
   #panel.hidden { transform: translateX(390px); opacity: 0; pointer-events: none; }
+  #panel-close {
+    position: absolute; top: 10px; right: 10px;
+    width: 28px; height: 28px; border-radius: 6px;
+    background: #21262d; border: 1px solid var(--border); color: var(--muted);
+    font-size: 14px; cursor: pointer; line-height: 1;
+  }
+  #panel-close:hover { color: var(--text); border-color: #8b949e; }
   #panel .cat { font-size: 11px; color: var(--gold); letter-spacing: 1px; margin-bottom: 4px; }
   #panel h2 { font-size: 18px; margin-bottom: 10px; line-height: 1.35; }
   #panel .value-box {
@@ -87,6 +94,23 @@
     background: rgba(13,17,23,.7); padding: 8px 12px; border-radius: 8px;
   }
   #hint b { color: var(--text); font-weight: 600; }
+
+  /* 移动端：面板改为底部抽屉 */
+  @media (max-width: 768px) {
+    #panel {
+      top: auto; left: 8px; right: 8px; bottom: 8px;
+      width: auto; max-height: 45vh;
+      border-radius: 12px 12px 8px 8px;
+    }
+    #panel.hidden { transform: translateY(110%); }
+    #topbar { flex-wrap: wrap; height: auto; padding: 8px 12px; gap: 8px; }
+    #topbar h1 { font-size: 13px; }
+    #rack-switcher { width: 100%; overflow-x: auto; }
+    #scene-caption { max-width: 92vw; font-size: 12px; top: auto; bottom: 8px; }
+    #panel:not(.hidden) ~ #scene-caption { display: none; }
+    #hint { display: none; }
+    #back-btn { top: auto; bottom: 12px; left: 12px; z-index: 11; }
+  }
 
   /* hover 标签 */
   #tooltip {
@@ -127,9 +151,9 @@
 
 <button id="back-btn">← 返回上一层</button>
 
-<div id="scene-caption"></div>
-
 <div id="panel" class="hidden"></div>
+
+<div id="scene-caption"></div>
 
 <div id="hint">
   <b>拖拽</b> 旋转 · <b>滚轮</b> 缩放 · <b>右键拖拽</b> 平移<br>

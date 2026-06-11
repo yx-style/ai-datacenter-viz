@@ -1,11 +1,14 @@
 // ============================================================
-// AI 数据中心可视化 — 场景与交互层
-// 三层结构：园区(campus) → 机柜(rack) → 托盘(tray/switchTray)
+// AI 数据中心可视化 — 场景与交互层 V2
+// 四层结构：园区(campus) → 机柜(rack) → 托盘(tray/switchTray)
+//          + 集群网络(cluster)
+// 机柜/托盘物理布局依据：NVIDIA DGX GB200 文档、OCP MGX 规格、
+// SemiAnalysis GB200 Hardware Architecture
 // 所有数据来自 data.js；这里只负责画和交互
 // ============================================================
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { META, CAMPUS_ZONES, RACK_TYPES, COMPONENTS, RACK_SUMMARY_GB200 } from './data.js';
+import { META, ARCH_COMPARE, CAMPUS_ZONES, RACK_TYPES, RACK_BOM, COMPONENTS } from './data.js';
 
 // ---------- 基础场景 ----------
 const wrap = document.getElementById('canvas-wrap');
@@ -53,17 +56,16 @@ const M = {
   grayBox: new THREE.MeshStandardMaterial({ color: 0x4b5563, roughness: 0.7 }),
   white:   new THREE.MeshStandardMaterial({ color: 0x9ca3af, roughness: 0.7 }),
   glass:   new THREE.MeshStandardMaterial({ color: 0x58a6ff, roughness: 0.2, transparent: true, opacity: 0.18 }),
+  ssd:     new THREE.MeshStandardMaterial({ color: 0x0e7490, roughness: 0.5 }),
 };
-// 每个可点击对象 clone 材质，避免高亮互相污染
 function mat(base) { return base.clone(); }
 
 // ---------- 交互注册 ----------
-// pickables: 当前层所有可点击 mesh；mesh.userData = {id, enterable}
 let pickables = [];
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 let hovered = null, selected = null;
-const pulseSet = new Set(); // 可进入下一层的对象，做呼吸发光
+const pulseSet = new Set();
 
 function makePickable(mesh, id, enterable = false) {
   mesh.userData.id = id;
@@ -83,7 +85,7 @@ function setEmissive(obj, color, intensity) {
 }
 
 // ---------- 层级状态机 ----------
-// view: 'campus' | 'rack' | 'tray' | 'switchTray'
+// view: 'campus' | 'rack' | 'tray' | 'switchTray' | 'cluster'
 let view = 'campus';
 let currentRackType = 'gb200';
 let levelGroup = new THREE.Group();
@@ -91,25 +93,25 @@ scene.add(levelGroup);
 
 const breadcrumbEl = document.getElementById('breadcrumb');
 const captionEl = document.getElementById('scene-caption');
-function setCaption(html) { captionEl.innerHTML = html || ''; }
 const backBtn = document.getElementById('back-btn');
 const panel = document.getElementById('panel');
 const tooltip = document.getElementById('tooltip');
 const switcherEl = document.getElementById('rack-switcher');
 
-const VIEW_PARENT = { rack: 'campus', tray: 'rack', switchTray: 'rack' };
+function setCaption(html) { captionEl.innerHTML = html || ''; }
+
+const VIEW_PARENT = { rack: 'campus', tray: 'rack', switchTray: 'rack', cluster: 'rack' };
 const VIEW_LABEL = {
   campus: '数据中心全景',
   rack: () => RACK_TYPES[currentRackType].name,
   tray: '计算托盘内部',
   switchTray: 'NVSwitch 托盘内部',
+  cluster: '集群网络',
 };
 
 function clearLevel() {
   scene.remove(levelGroup);
-  levelGroup.traverse(c => {
-    if (c.isMesh) { c.geometry.dispose(); }
-  });
+  levelGroup.traverse(c => { if (c.isMesh) c.geometry.dispose(); });
   levelGroup = new THREE.Group();
   scene.add(levelGroup);
   pickables = [];
@@ -126,6 +128,7 @@ function goto(v) {
   else if (v === 'rack') buildRack(currentRackType);
   else if (v === 'tray') buildTray();
   else if (v === 'switchTray') buildSwitchTray();
+  else if (v === 'cluster') buildCluster();
   renderBreadcrumb();
   backBtn.style.display = v === 'campus' ? 'none' : 'block';
   switcherEl.style.display = (v === 'rack') ? 'flex' : 'none';
@@ -158,7 +161,7 @@ function renderSwitcher() {
   switcherEl.innerHTML = '';
   Object.values(RACK_TYPES).forEach(rt => {
     const b = document.createElement('button');
-    b.textContent = rt.name.replace('NVIDIA ', '').replace('Google ', '').replace('华为昇腾 ', '昇腾 ').replace('（对照组）', '');
+    b.textContent = rt.short;
     b.className = rt.id === currentRackType ? 'active' : '';
     b.onclick = () => {
       currentRackType = rt.id;
@@ -174,25 +177,39 @@ function fmtK(k) {
   if (k == null) return '待补充';
   return k >= 1000 ? '$' + (k / 1000).toFixed(2) + 'M' : '$' + k + 'K';
 }
-function showPanel(html) { panel.innerHTML = html; panel.classList.remove('hidden'); }
+function showPanel(html) {
+  panel.innerHTML = '<button id="panel-close" aria-label="关闭">✕</button>' + html;
+  panel.classList.remove('hidden');
+  document.getElementById('panel-close').onclick = () => {
+    hidePanel();
+    if (selected) { setEmissive(selected, 0x000000, 0); selected = null; }
+  };
+}
 function hidePanel() { panel.classList.add('hidden'); }
+
+function valueBox(perRackK, bGW, pct, vrK) {
+  let html = `<div class="value-box">
+    <div class="v"><b>${fmtK(perRackK)}</b><span>单机柜 (GB200)</span></div>`;
+  if (vrK != null) html += `<div class="v"><b>${fmtK(vrK)}</b><span>单机柜 (VR)</span></div>`;
+  html += `<div class="v"><b>${bGW != null ? '$' + bGW + 'B' : '—'}</b><span>每 GW</span></div>
+    <div class="v"><b>${pct != null ? pct + '%' : '—'}</b><span>占 DC capex</span></div>
+  </div>`;
+  return html;
+}
 
 function panelForComponent(id) {
   const c = COMPONENTS[id];
   if (!c) return;
   const v = c.value || {};
   let html = `<div class="cat">${c.cat}</div><h2>${c.name}</h2>`;
-  html += `<div class="value-box">
-    <div class="v"><b>${fmtK(v.perRackK)}</b><span>单机柜价值</span></div>
-    <div class="v"><b>${v.bGW != null ? '$' + v.bGW + 'B' : '—'}</b><span>每 GW</span></div>
-    <div class="v"><b>${v.pct != null ? v.pct + '%' : '—'}</b><span>占 DC capex</span></div>
-  </div>`;
+  html += valueBox(v.perRackK, v.bGW, v.pct, c.vrK);
   if (c.valueNote) html += `<div class="vnote">${c.valueNote}</div>`;
   html += `<div class="sec">是什么 / 干什么</div><p>${c.desc}</p>`;
   html += `<div class="sec">长什么样</div><p>${c.shape}</p>`;
   html += `<div class="sec">主要玩家</div><div class="players">${c.players.map(p => `<span>${p}</span>`).join('')}</div>`;
-  if (c.action === 'enterTray') html += `<div class="enter-hint" onclick="window.__enter('tray')">⊕ 双击托盘 / 点这里 → 进入托盘内部</div>`;
-  if (c.action === 'enterSwitchTray') html += `<div class="enter-hint" onclick="window.__enter('switchTray')">⊕ 双击托盘 / 点这里 → 进入交换托盘内部</div>`;
+  if (c.action === 'enterTray') html += `<div class="enter-hint" onclick="window.__enter('tray')">⊕ 进入托盘内部</div>`;
+  if (c.action === 'enterSwitchTray') html += `<div class="enter-hint" onclick="window.__enter('switchTray')">⊕ 进入交换托盘内部</div>`;
+  if (c.action === 'enterCluster') html += `<div class="enter-hint" onclick="window.__enter('cluster')">⊕ 进入集群网络视图</div>`;
   html += `<div class="conf">数据置信度：${c.conf}（A=报告表格原文 B=报告正文 C=待校准）<br>来源：${META.source}</div>`;
   showPanel(html);
 }
@@ -210,15 +227,14 @@ function panelForZone(id) {
   html += `<div class="sec">角色</div><p>${z.role}</p>`;
   if (z.children) {
     html += `<div class="sec">内部拆分（$K/柜）</div><table>` +
-      z.children.map(c => `<tr><td>${c.name}</td><td>${c.perRackK}</td><td>${c.pct}%</td></tr>`).join('') + `</table>`;
+      z.children.map(c => `<tr><td>${c.name}</td><td>${c.perRackK}</td></tr>`).join('') + `</table>`;
   }
   html += `<div class="sec">主要玩家</div><div class="players">${z.players.map(p => `<span>${p}</span>`).join('')}</div>`;
-  if (z.action === 'enterRack') html += `<div class="enter-hint" onclick="window.__enter('rack')">⊕ 双击机房 / 点这里 → 进入机柜层</div>`;
+  if (z.action === 'enterRack') html += `<div class="enter-hint" onclick="window.__enter('rack')">⊕ 进入机柜层</div>`;
   html += `<div class="conf">数据置信度：${z.conf}<br>来源：${META.source}</div>`;
   showPanel(html);
 }
 
-// 机柜总览（进入机柜层时默认展示）
 function showRackOverview() {
   const rt = RACK_TYPES[currentRackType];
   let html = `<div class="cat">机柜方案 · ${rt.status === 'detailed' ? '详细数据' : rt.status === 'brief' ? '简要数据' : '框架占位，待补数据'}</div>`;
@@ -229,12 +245,19 @@ function showRackOverview() {
   </div>`;
   html += `<div class="sec">一句话</div><p>${rt.tagline}</p>`;
   html += `<div class="sec">结构</div><p>${rt.spec}</p>`;
-  if (rt.id === 'gb200' || rt.id === 'gb300') {
-    html += `<div class="sec">整柜 BOM 速览（GB200 口径，点行高亮）</div><table>` +
-      RACK_SUMMARY_GB200.map(r =>
-        `<tr class="clickable" data-comp="${r.id}"><td>${r.name}</td><td>$${r.perRackK}K</td><td>${r.pct}%</td></tr>`
+  const bom = RACK_BOM[currentRackType];
+  if (bom) {
+    html += `<div class="sec">整柜 BOM（$K/柜，点行高亮）</div><table>` +
+      bom.map(r =>
+        `<tr class="clickable" data-comp="${r.id}"><td>${r.name}</td><td>${r.perRackK.toLocaleString()}</td></tr>`
       ).join('') + `</table>`;
   }
+  // 三代对照表
+  html += `<div class="sec">三代架构对照</div><table>` +
+    ARCH_COMPARE.rows.map(row =>
+      `<tr><td>${row[0]}</td><td>${row[1]}</td><td>${row[2]}</td><td>${row[3]}</td></tr>`
+    ).join('') + `</table>
+    <div class="vnote" style="margin-top:4px">列序：${ARCH_COMPARE.headers.slice(1).join(' / ')}</div>`;
   html += `<div class="conf">数据置信度：${rt.conf}<br>来源：${META.source}</div>`;
   showPanel(html);
   panel.querySelectorAll('tr.clickable').forEach(tr => {
@@ -248,133 +271,10 @@ function highlightById(id) {
   if (target) { selected = target; setEmissive(target, 0x58a6ff, 0.7); }
 }
 
-// 进入下一层的全局入口（面板里的按钮用）
 window.__enter = (v) => goto(v);
 
-// ============================================================
-// 第 1 层：园区全景
-// ============================================================
-function buildCampus() {
-  camera.position.set(34, 26, 38);
-  controls.target.set(0, 2, 0);
-  setCaption('数据中心全景 · 全口径 $5.9M/机柜、$35B/GW · 双击机房白区进入机柜层');
-
-  // 地面
-  const ground = new THREE.Mesh(new THREE.BoxGeometry(90, 0.5, 64), mat(M.floor));
-  ground.position.y = -0.25;
-  levelGroup.add(ground);
-
-  // --- 建筑外壳（土地与建筑）---
-  const shell = new THREE.Group();
-  const shellWall = new THREE.Mesh(new THREE.BoxGeometry(46, 9, 30), mat(M.glass));
-  shellWall.position.set(-8, 4.5, 0);
-  shell.add(shellWall);
-  const shellEdges = new THREE.LineSegments(
-    new THREE.EdgesGeometry(new THREE.BoxGeometry(46, 9, 30)),
-    new THREE.LineBasicMaterial({ color: 0x30363d })
-  );
-  shellEdges.position.copy(shellWall.position);
-  shell.add(shellEdges);
-  levelGroup.add(shell);
-  makePickable(shellWall, 'zone:land');
-
-  // --- 机房白区：建筑内的机柜阵列 ---
-  const whitespace = new THREE.Group();
-  for (let row = 0; row < 4; row++) {
-    for (let col = 0; col < 10; col++) {
-      const r = new THREE.Mesh(new THREE.BoxGeometry(1.4, 4.6, 2.4), mat(M.darkMetal));
-      r.position.set(-26 + col * 4.0, 2.3, -10.5 + row * 7);
-      whitespace.add(r);
-      // 正面指示灯
-      const led = new THREE.Mesh(new THREE.BoxGeometry(1.0, 3.8, 0.06), mat(M.blue));
-      led.material.emissive = new THREE.Color(0x2563eb);
-      led.material.emissiveIntensity = 0.5;
-      led.position.set(r.position.x, 2.3, r.position.z + 1.24);
-      whitespace.add(led);
-    }
-  }
-  levelGroup.add(whitespace);
-  makePickable(whitespace, 'zone:whitespace', true);
-
-  // --- 配电区（建筑旁：变压器 + 开关柜）---
-  const power = new THREE.Group();
-  for (let i = 0; i < 3; i++) {
-    const tr = new THREE.Mesh(new THREE.BoxGeometry(3.2, 3, 2.6), mat(M.grayBox));
-    tr.position.set(20, 1.5, -10 + i * 5);
-    power.add(tr);
-    // 散热鳍片
-    const fin = new THREE.Mesh(new THREE.BoxGeometry(0.3, 2.4, 2.2), mat(M.metal));
-    fin.position.set(21.9, 1.5, -10 + i * 5);
-    power.add(fin);
-  }
-  // 开关柜一排
-  for (let i = 0; i < 4; i++) {
-    const sg = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.4, 1.2), mat(M.metal));
-    sg.position.set(25.5, 1.2, -9 + i * 3.4);
-    power.add(sg);
-  }
-  levelGroup.add(power);
-  makePickable(power, 'zone:power-distribution');
-
-  // --- 备用电源 UPS 室（建筑内一角，画在建筑边上）---
-  const ups = new THREE.Group();
-  for (let i = 0; i < 3; i++) {
-    const u = new THREE.Mesh(new THREE.BoxGeometry(1.6, 2.6, 1.4), mat(M.white));
-    u.position.set(12.2, 1.3, 9 - i * 2.6);
-    ups.add(u);
-  }
-  levelGroup.add(ups);
-  makePickable(ups, 'zone:backup-power');
-
-  // --- 柴发阵列（集装箱式，建筑后侧）---
-  const gens = new THREE.Group();
-  for (let i = 0; i < 5; i++) {
-    const g = new THREE.Mesh(new THREE.BoxGeometry(6, 2.8, 2.4), mat(M.chipGold));
-    g.material.color = new THREE.Color(0x8a6d1a);
-    g.position.set(-24 + i * 8, 1.4, 22);
-    gens.add(g);
-    const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 1.6), mat(M.darkMetal));
-    pipe.position.set(-24 + i * 8 + 2, 3.6, 22);
-    gens.add(pipe);
-  }
-  levelGroup.add(gens);
-  makePickable(gens, 'zone:generators');
-
-  // --- 热管理（冷却塔/干冷器，建筑另一侧）---
-  const cooling = new THREE.Group();
-  for (let i = 0; i < 4; i++) {
-    const base = new THREE.Mesh(new THREE.BoxGeometry(3.4, 2, 3.4), mat(M.metal));
-    base.position.set(-30 + i * 6, 1, -24);
-    cooling.add(base);
-    const fan = new THREE.Mesh(new THREE.CylinderGeometry(1.35, 1.35, 0.5, 24), mat(M.darkMetal));
-    fan.position.set(-30 + i * 6, 2.3, -24);
-    cooling.add(fan);
-  }
-  levelGroup.add(cooling);
-  makePickable(cooling, 'zone:thermal');
-
-  // --- 其他基础设施（水罐+杂项，角落）---
-  const other = new THREE.Group();
-  const tank1 = new THREE.Mesh(new THREE.CylinderGeometry(1.8, 1.8, 4, 20), mat(M.white));
-  tank1.position.set(24, 2, 12);
-  other.add(tank1);
-  const tank2 = new THREE.Mesh(new THREE.CylinderGeometry(1.3, 1.3, 3, 20), mat(M.white));
-  tank2.position.set(28.5, 1.5, 14);
-  other.add(tank2);
-  levelGroup.add(other);
-  makePickable(other, 'zone:other-infra');
-
-  // 区域文字标签（用 sprite 画 canvas 文字）
-  addLabel('机房白区（点击进入机柜）', -8, 10.5, 0);
-  addLabel('配电', 23, 5, -4);
-  addLabel('UPS', 12.2, 4.5, 6);
-  addLabel('柴油/燃气发电机', -8, 5.5, 22);
-  addLabel('冷却', -21, 5, -24);
-  addLabel('储水/杂项', 26, 6, 13);
-}
-
+// ---------- 3D 文字标签 ----------
 function addLabel(text, x, y, z, scale = 1) {
-  // 按文字实际宽度建画布，避免截断；高分辨率画布避免模糊
   const fontSize = 56;
   const pad = 24;
   const cv = document.createElement('canvas');
@@ -391,11 +291,187 @@ function addLabel(text, x, y, z, scale = 1) {
   const tex = new THREE.CanvasTexture(cv);
   tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
   const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
-  // 世界尺寸与画布等比，文字不变形
   const worldH = 1.0 * scale;
   sp.scale.set(worldH * cv.width / cv.height, worldH, 1);
   sp.position.set(x, y, z);
   levelGroup.add(sp);
+}
+
+// 管道辅助：两点间圆柱
+function pipe(p1, p2, radius, material) {
+  const v1 = new THREE.Vector3(...p1), v2 = new THREE.Vector3(...p2);
+  const len = v1.distanceTo(v2);
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, len, 10), material);
+  m.position.copy(v1).add(v2).multiplyScalar(0.5);
+  m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), v2.clone().sub(v1).normalize());
+  return m;
+}
+
+// ============================================================
+// 第 1 层：园区全景（电力链路 + 冷却链路 + 白区）
+// 布局：左侧=电力链路（柴发→ATS→变压器→开关柜→UPS→白区）
+//       右侧=冷却链路（白区 CDU→冷机→冷却塔）
+// ============================================================
+function buildCampus() {
+  camera.position.set(36, 28, 40);
+  controls.target.set(0, 2, 0);
+  setCaption('数据中心全景 · GB200 口径 $40.5B/GW（VR $47.3B） · 左=电力链路 右=冷却链路 · 双击机房白区进入机柜层');
+
+  const ground = new THREE.Mesh(new THREE.BoxGeometry(100, 0.5, 70), mat(M.floor));
+  ground.position.y = -0.25;
+  levelGroup.add(ground);
+
+  // --- 建筑外壳 ---
+  const shellGeo = new THREE.BoxGeometry(42, 9, 30);
+  const shellWall = new THREE.Mesh(shellGeo, mat(M.glass));
+  shellWall.position.set(-4, 4.5, 0);
+  levelGroup.add(shellWall);
+  const shellEdges = new THREE.LineSegments(
+    new THREE.EdgesGeometry(shellGeo),
+    new THREE.LineBasicMaterial({ color: 0x30363d })
+  );
+  shellEdges.position.copy(shellWall.position);
+  levelGroup.add(shellEdges);
+  makePickable(shellWall, 'zone:land');
+
+  // --- 机房白区：计算柜（蓝）+ 支持柜（灰），参考 Vertiv 48+48 ---
+  const whitespace = new THREE.Group();
+  for (let row = 0; row < 4; row++) {
+    for (let col = 0; col < 9; col++) {
+      const isSupport = (col === 4); // 中间一列支持柜
+      const r = new THREE.Mesh(new THREE.BoxGeometry(1.4, 4.6, 2.4), mat(isSupport ? M.grayBox : M.darkMetal));
+      r.position.set(-20 + col * 4.0, 2.3, -10.5 + row * 7);
+      whitespace.add(r);
+      if (!isSupport) {
+        const led = new THREE.Mesh(new THREE.BoxGeometry(1.0, 3.8, 0.06), mat(M.blue));
+        led.material.emissive = new THREE.Color(0x2563eb);
+        led.material.emissiveIntensity = 0.5;
+        led.position.set(r.position.x, 2.3, r.position.z + 1.24);
+        whitespace.add(led);
+      }
+    }
+  }
+  levelGroup.add(whitespace);
+  makePickable(whitespace, 'zone:whitespace', true);
+
+  // ============ 电力链路（左侧，从远到近：柴发→变压器→开关柜/UPS→白区）============
+  // 柴发阵列
+  const gens = new THREE.Group();
+  for (let i = 0; i < 5; i++) {
+    const g = new THREE.Mesh(new THREE.BoxGeometry(5.5, 2.8, 2.4), mat(M.chipGold));
+    g.material.color = new THREE.Color(0x8a6d1a);
+    g.position.set(-44, 1.4, -16 + i * 7);
+    gens.add(g);
+    const pipeM = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 1.6), mat(M.darkMetal));
+    pipeM.position.set(-44 + 1.8, 3.6, -16 + i * 7);
+    gens.add(pipeM);
+  }
+  levelGroup.add(gens);
+  makePickable(gens, 'zone:generators');
+
+  // 变压器排
+  const power = new THREE.Group();
+  for (let i = 0; i < 3; i++) {
+    const tr = new THREE.Mesh(new THREE.BoxGeometry(3.0, 3, 2.6), mat(M.grayBox));
+    tr.position.set(-34, 1.5, -8 + i * 6);
+    power.add(tr);
+    const fin = new THREE.Mesh(new THREE.BoxGeometry(0.3, 2.4, 2.2), mat(M.metal));
+    fin.position.set(-32.3, 1.5, -8 + i * 6);
+    power.add(fin);
+  }
+  // 开关柜一排（贴建筑）
+  for (let i = 0; i < 4; i++) {
+    const sg = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.4, 1.2), mat(M.metal));
+    sg.position.set(-28.5, 1.2, -7 + i * 3.4);
+    power.add(sg);
+  }
+  levelGroup.add(power);
+  makePickable(power, 'zone:power-distribution');
+
+  // UPS 室（建筑内左缘）
+  const ups = new THREE.Group();
+  for (let i = 0; i < 3; i++) {
+    const u = new THREE.Mesh(new THREE.BoxGeometry(1.6, 2.6, 1.4), mat(M.white));
+    u.position.set(-23, 1.3, 8 - i * 2.6);
+    ups.add(u);
+  }
+  levelGroup.add(ups);
+  makePickable(ups, 'zone:backup-power');
+
+  // 电力链路连线（黄色粗线，示意电流方向）
+  const pl = mat(M.chipGold); pl.color = new THREE.Color(0xb8860b);
+  levelGroup.add(pipe([-41, 1.2, 0], [-35.5, 1.2, 0], 0.12, pl));      // 柴发→变压器
+  levelGroup.add(pipe([-32.5, 1.2, 0], [-29, 1.2, 0], 0.12, pl));      // 变压器→开关柜
+  levelGroup.add(pipe([-28, 1.2, 2], [-24, 1.2, 5], 0.12, pl));        // 开关柜→UPS
+  levelGroup.add(pipe([-22, 1.2, 5], [-18, 1.2, 0], 0.12, pl));        // UPS→白区
+
+  // ============ 冷却链路（右侧：白区→CDU→冷机→冷却塔）============
+  // CDU 排（建筑内右缘）
+  const cdus = new THREE.Group();
+  for (let i = 0; i < 3; i++) {
+    const c = new THREE.Mesh(new THREE.BoxGeometry(1.4, 2.4, 1.6), mat(M.ssd));
+    c.position.set(15, 1.2, -8 + i * 5);
+    cdus.add(c);
+  }
+  levelGroup.add(cdus);
+  makePickable(cdus, 'comp:cdu');
+
+  // 冷机房（建筑右外侧）
+  const chillers = new THREE.Group();
+  for (let i = 0; i < 2; i++) {
+    const ch = new THREE.Mesh(new THREE.BoxGeometry(5, 2.6, 2.8), mat(M.white));
+    ch.position.set(26, 1.3, -6 + i * 7);
+    chillers.add(ch);
+    const cyl = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.9, 4.4, 16), mat(M.grayBox));
+    cyl.rotation.z = Math.PI / 2;
+    cyl.position.set(26, 2.6, -6 + i * 7);
+    chillers.add(cyl);
+  }
+  levelGroup.add(chillers);
+  makePickable(chillers, 'comp:chiller');
+
+  // 冷却塔（最右侧）
+  const towers = new THREE.Group();
+  for (let i = 0; i < 4; i++) {
+    const base = new THREE.Mesh(new THREE.BoxGeometry(3.4, 2.6, 3.4), mat(M.metal));
+    base.position.set(38, 1.3, -10 + i * 6.5);
+    towers.add(base);
+    const fan = new THREE.Mesh(new THREE.CylinderGeometry(1.35, 1.35, 0.5, 24), mat(M.darkMetal));
+    fan.position.set(38, 2.9, -10 + i * 6.5);
+    towers.add(fan);
+  }
+  levelGroup.add(towers);
+  makePickable(towers, 'comp:cooling-tower');
+
+  // 冷却链路水管（蓝=供 红=回）
+  levelGroup.add(pipe([12, 1.0, 0], [15, 1.0, -2], 0.14, mat(M.blue)));
+  levelGroup.add(pipe([15.8, 1.0, -2], [23.5, 1.0, -3], 0.14, mat(M.red)));   // CDU→冷机（热水）
+  levelGroup.add(pipe([23.5, 0.7, -3], [15.8, 0.7, -2], 0.14, mat(M.blue)));  // 冷机→CDU（冷水）
+  levelGroup.add(pipe([28.5, 1.0, -3], [36, 1.0, -5], 0.14, mat(M.red)));     // 冷机→冷却塔
+  levelGroup.add(pipe([36, 0.7, -5], [28.5, 0.7, -3], 0.14, mat(M.blue)));
+
+  // 其他基础设施（储水罐，后侧角落）
+  const other = new THREE.Group();
+  const tank1 = new THREE.Mesh(new THREE.CylinderGeometry(1.8, 1.8, 4, 20), mat(M.white));
+  tank1.position.set(30, 2, 14);
+  other.add(tank1);
+  const tank2 = new THREE.Mesh(new THREE.CylinderGeometry(1.3, 1.3, 3, 20), mat(M.white));
+  tank2.position.set(34, 1.5, 12);
+  other.add(tank2);
+  levelGroup.add(other);
+  makePickable(other, 'zone:other-infra');
+
+  // 区域标签
+  addLabel('机房白区', -4, 10.3, 0, 0.9);
+  addLabel('柴发', -44, 5.2, -2, 0.6);
+  addLabel('变压器/开关柜', -32, 5.2, -1, 0.6);
+  addLabel('UPS', -23, 4.6, 6, 0.55);
+  addLabel('CDU', 15, 4.2, -3, 0.55);
+  addLabel('冷机', 26, 4.8, -2.5, 0.55);
+  addLabel('冷却塔', 38, 5.2, -3, 0.6);
+  addLabel('储水', 32, 5.4, 13, 0.5);
+  addLabel('→ 电力链路 →', -33, 0.4, 9, 0.6);
+  addLabel('→ 冷却链路 →', 26, 0.4, 7, 0.6);
 }
 
 // ============================================================
@@ -412,39 +488,40 @@ function buildRack(type) {
 
   if (type === 'gb200' || type === 'gb300') {
     buildNVL72Rack();
-    setCaption('银色 = GB 计算托盘 ×18 · 金色 = NVSwitch 托盘 ×9 · 双击托盘进入内部');
+    setCaption('NVL72 真实布局：顶 TOR + 电源架×2 · 上 10 计算托盘 · 中 9 NVSwitch（金）· 下 8 计算托盘 · 底电源架×2 · 双击托盘进入');
   } else if (type === 'rubin') {
     buildNVL72Rack();
-    setCaption('Vera Rubin NVL144（借用 NVL72 结构示意） · 柜内电源价值量 2-3 倍 → Rubin Ultra 7-8 倍 · <span class="warn">⚠ 整柜 BOM 待材料补充</span>');
+    setCaption('Vera Rubin NVL72（借 NVL72 结构示意） · $9.1M/柜 220kW · 电源/液冷/铜缆价值量均 ~3 倍于 GB200');
+  } else if (type === 'h100') {
+    buildH100Rack();
+    setCaption('H100 DGX×8（上代对照）：风冷 HGX 服务器堆叠，41kW/柜 $2.0M · 与 NVL72 的本质区别是风冷 vs 液冷');
   } else if (type === 'tpu') {
-    buildSchematicRack('TPU 托盘', 0x4285f4, 8);
-    setCaption('Google TPU v7 机柜（示意） · <span class="warn">⚠ 框架占位，等材料补 BOM</span>');
+    buildSchematicRack(0x4285f4, 8);
+    setCaption('Google TPU 机柜（示意） · <span class="warn">⚠ 框架占位，等材料补 BOM</span>');
   } else if (type === 'ascend') {
-    buildSchematicRack('昇腾计算托盘', 0xc94a3d, 8);
+    buildSchematicRack(0xc94a3d, 8);
     setCaption('华为 CloudMatrix 单计算柜（示意，超节点共 16 柜） · <span class="warn">⚠ 框架占位，等材料补 BOM</span>');
   } else if (type === 'cpu') {
     buildCPURack();
-    setCaption('通用 CPU 机柜（对照组）：约 20 台 2U 双路服务器 + TOR 交换机 · 整柜 ~$0.3-0.5M ≈ NVL72 的 1/8');
+    setCaption('通用 CPU 机柜（对照）：20 台 2U 服务器 + TOR · 整柜 ~$0.4M ≈ GB200 的 1/10、VR 的 1/20');
   }
 
   showRackOverview();
 }
 
-// 标准 NVL72 机柜
+// NVL72 机柜（按 NVIDIA DGX 文档/SemiAnalysis 布局）
+// 自上而下：TOR×1 → 电源架×2 → 计算×10 → NVSwitch×9 → 计算×8 → 电源架×2
 function buildNVL72Rack() {
-  const W = 1.2, D = 2.4; // 柜宽（含两侧）、柜深（放大比例便于观察）
+  const W = 1.2, D = 2.4;
   // 框架
   const frame = new THREE.Group();
-  const frameGeo = [
-    [-W/2, 0, -D/2], [W/2, 0, -D/2], [-W/2, 0, D/2], [W/2, 0, D/2],
-  ];
-  frameGeo.forEach(([x, , z]) => {
-    const post = new THREE.Mesh(new THREE.BoxGeometry(0.08, 3.2, 0.08), mat(M.darkMetal));
-    post.position.set(x, 1.6, z);
+  [[-W/2, -D/2], [W/2, -D/2], [-W/2, D/2], [W/2, D/2]].forEach(([x, z]) => {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.08, 3.4, 0.08), mat(M.darkMetal));
+    post.position.set(x, 1.7, z);
     frame.add(post);
   });
   const top = new THREE.Mesh(new THREE.BoxGeometry(W, 0.07, D), mat(M.darkMetal));
-  top.position.y = 3.2;
+  top.position.y = 3.4;
   frame.add(top);
   const base = new THREE.Mesh(new THREE.BoxGeometry(W, 0.12, D), mat(M.darkMetal));
   base.position.y = 0.06;
@@ -452,81 +529,88 @@ function buildNVL72Rack() {
   levelGroup.add(frame);
   makePickable(frame, 'rack-frame');
 
-  // 托盘布局（从下往上）：电源架2 + 计算9 + 交换9(中间) + 计算9 + 电源架2
   const trayH = 0.082, gap = 0.012;
-  let y = 0.22;
+  let y = 0.18;
+  // 布局序列（从下往上画）
   const slots = [];
   for (let i = 0; i < 2; i++) slots.push('power');
-  for (let i = 0; i < 9; i++) slots.push('compute');
+  for (let i = 0; i < 8; i++) slots.push('compute');
   for (let i = 0; i < 9; i++) slots.push('switch');
-  for (let i = 0; i < 9; i++) slots.push('compute');
+  for (let i = 0; i < 10; i++) slots.push('compute');
   for (let i = 0; i < 2; i++) slots.push('power');
+  slots.push('tor');
 
   const computeGroup = new THREE.Group();
   const switchGroup = new THREE.Group();
   const powerGroup = new THREE.Group();
+  const torGroup = new THREE.Group();
 
   slots.forEach(kind => {
     let m, g;
-    if (kind === 'compute') {
-      m = mat(M.metal); g = computeGroup;
-    } else if (kind === 'switch') {
-      m = mat(M.chipGold); g = switchGroup;
-    } else {
-      m = mat(M.grayBox); g = powerGroup;
-    }
+    if (kind === 'compute') { m = mat(M.metal); g = computeGroup; }
+    else if (kind === 'switch') { m = mat(M.chipGold); g = switchGroup; }
+    else if (kind === 'tor') { m = mat(M.green); g = torGroup; }
+    else { m = mat(M.grayBox); g = powerGroup; }
     const tray = new THREE.Mesh(new THREE.BoxGeometry(W - 0.18, trayH, D - 0.3), m);
     tray.position.set(0, y + trayH / 2, 0);
     g.add(tray);
-    // 前面板细节：一条深色槽
     const face = new THREE.Mesh(new THREE.BoxGeometry(W - 0.24, trayH * 0.6, 0.02), mat(M.chipDark));
     face.position.set(0, y + trayH / 2, (D - 0.3) / 2 + 0.012);
     g.add(face);
     y += trayH + gap;
   });
-  levelGroup.add(computeGroup, switchGroup, powerGroup);
+  levelGroup.add(computeGroup, switchGroup, powerGroup, torGroup);
   makePickable(computeGroup, 'compute-tray', true);
   makePickable(switchGroup, 'nvswitch-tray', true);
   makePickable(powerGroup, 'power-shelf');
+  makePickable(torGroup, 'tor-switch');
 
-  // 液冷歧管：柜后两根竖管（蓝进红回）
+  // 直流母排：后部中央垂直铜排
+  const busbar = new THREE.Group();
+  const bar = new THREE.Mesh(new THREE.BoxGeometry(0.12, 3.1, 0.05), mat(M.copper));
+  bar.position.set(0, 1.65, -D/2 + 0.10);
+  busbar.add(bar);
+  levelGroup.add(busbar);
+  makePickable(busbar, 'busbar');
+
+  // 液冷歧管：后部两侧垂直管
   const manifold = new THREE.Group();
-  const blue = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 3.0), mat(M.blue));
-  blue.position.set(-W/2 + 0.13, 1.6, -D/2 + 0.07);
-  const red = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 3.0), mat(M.red));
-  red.position.set(W/2 - 0.13, 1.6, -D/2 + 0.07);
+  const blue = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 3.1), mat(M.blue));
+  blue.position.set(-W/2 + 0.13, 1.65, -D/2 + 0.08);
+  const red = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 3.1), mat(M.red));
+  red.position.set(W/2 - 0.13, 1.65, -D/2 + 0.08);
   manifold.add(blue, red);
   levelGroup.add(manifold);
   makePickable(manifold, 'manifold');
 
-  // 铜缆背板：柜后中部一块铜色密集体
+  // 铜缆背板：后部两块缆束区（避开中央母排）
   const backplane = new THREE.Group();
-  const bp = new THREE.Mesh(new THREE.BoxGeometry(W - 0.35, 2.6, 0.1), mat(M.copper));
-  bp.position.set(0, 1.65, -D/2 + 0.16);
-  backplane.add(bp);
-  // 几束缆线的视觉暗示
-  for (let i = 0; i < 7; i++) {
-    const c = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 2.4), mat(M.copper));
-    c.material.color = new THREE.Color(0x8a5a28);
-    c.position.set(-0.36 + i * 0.12, 1.65, -D/2 + 0.24);
-    backplane.add(c);
-  }
+  [-0.28, 0.28].forEach(x => {
+    const bp = new THREE.Mesh(new THREE.BoxGeometry(0.34, 2.6, 0.1), mat(M.copper));
+    bp.material.color = new THREE.Color(0x8a5a28);
+    bp.position.set(x, 1.65, -D/2 + 0.18);
+    backplane.add(bp);
+    for (let i = 0; i < 3; i++) {
+      const c = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 2.4), mat(M.copper));
+      c.position.set(x - 0.1 + i * 0.1, 1.65, -D/2 + 0.26);
+      backplane.add(c);
+    }
+  });
   levelGroup.add(backplane);
   makePickable(backplane, 'copper-backplane');
 
-  // 旁边的幽灵柜：网络柜 + 存储柜（半透明示意）
+  // 幽灵柜：网络柜（可进集群层）+ 存储说明柜
   const netRack = ghostRack(0x58a6ff, 2.6);
   netRack.position.set(2.6, 0, 0);
   levelGroup.add(netRack);
-  makePickable(netRack, 'network-rack');
-  addLabel('网络机柜(scale-out)', 2.6, 3.5, 0, 0.22);
+  makePickable(netRack, 'network-rack', true);
+  addLabel('网络机柜 → 集群', 2.6, 3.4, 0, 0.24);
 
-  const stoRack = ghostRack(0x8b949e, 2.6);
+  const stoRack = ghostRack(0x0e7490, 2.6);
   stoRack.position.set(-2.6, 0, 0);
   levelGroup.add(stoRack);
-  makePickable(stoRack, 'storage-tray');
-  addLabel('存储机柜', -2.6, 3.5, 0, 0.22);
-
+  makePickable(stoRack, 'e1s-storage');
+  addLabel('存储（柜内E1.S+外部阵列）', -2.6, 3.4, 0, 0.24);
 }
 
 function ghostRack(color, h) {
@@ -551,16 +635,40 @@ function ghostRack(color, h) {
   return g;
 }
 
-// 示意机柜（TPU / 昇腾：框架占位）
-function buildSchematicRack(trayName, color, trayCount) {
+// H100 风冷机柜（对照）：4 台 5RU HGX 服务器 + 大空隙
+function buildH100Rack() {
   const W = 1.2, D = 2.0;
-  const frame = new THREE.Group();
+  [[-W/2, -D/2], [W/2, -D/2], [-W/2, D/2], [W/2, D/2]].forEach(([x, z]) => {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.07, 3.2, 0.07), mat(M.darkMetal));
+    post.position.set(x, 1.6, z);
+    levelGroup.add(post);
+  });
+  const servers = new THREE.Group();
+  for (let i = 0; i < 4; i++) {
+    const s = new THREE.Mesh(new THREE.BoxGeometry(W - 0.2, 0.42, D - 0.3), mat(M.metal));
+    s.position.set(0, 0.5 + i * 0.62, 0);
+    servers.add(s);
+    // 风扇格栅暗示
+    for (let f = 0; f < 5; f++) {
+      const fan = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.03, 12), mat(M.darkMetal));
+      fan.rotation.x = Math.PI / 2;
+      fan.position.set(-0.4 + f * 0.2, 0.5 + i * 0.62, (D - 0.3) / 2 + 0.02);
+      servers.add(fan);
+    }
+  }
+  const tor = new THREE.Mesh(new THREE.BoxGeometry(W - 0.2, 0.1, D - 0.3), mat(M.green));
+  tor.position.set(0, 3.0, 0);
+  servers.add(tor);
+  levelGroup.add(servers);
+  makePickable(servers, 'compute-tray');
+}
+
+function buildSchematicRack(color, trayCount) {
+  const W = 1.2, D = 2.0;
   const body = new THREE.Mesh(new THREE.BoxGeometry(W, 3.2, D),
     new THREE.MeshStandardMaterial({ color: 0x252b33, transparent: true, opacity: 0.35 }));
   body.position.y = 1.7;
-  frame.add(body);
-  levelGroup.add(frame);
-
+  levelGroup.add(body);
   const trays = new THREE.Group();
   for (let i = 0; i < trayCount; i++) {
     const t = new THREE.Mesh(new THREE.BoxGeometry(W - 0.2, 0.18, D - 0.3),
@@ -571,17 +679,13 @@ function buildSchematicRack(trayName, color, trayCount) {
   levelGroup.add(trays);
 }
 
-// 通用 CPU 机柜（对照组）
 function buildCPURack() {
   const W = 1.2, D = 2.0;
-  const frame = new THREE.Group();
-  [-W/2, W/2].forEach(x => [-D/2, D/2].forEach(z => {
+  [[-W/2, -D/2], [W/2, -D/2], [-W/2, D/2], [W/2, D/2]].forEach(([x, z]) => {
     const post = new THREE.Mesh(new THREE.BoxGeometry(0.07, 3.2, 0.07), mat(M.darkMetal));
     post.position.set(x, 1.6, z);
-    frame.add(post);
-  }));
-  levelGroup.add(frame);
-
+    levelGroup.add(post);
+  });
   const servers = new THREE.Group();
   for (let i = 0; i < 20; i++) {
     const s = new THREE.Mesh(new THREE.BoxGeometry(W - 0.2, 0.11, D - 0.3), mat(M.metal));
@@ -595,150 +699,175 @@ function buildCPURack() {
 }
 
 // ============================================================
-// 第 3 层：计算托盘内部
+// 第 3 层：计算托盘内部（按 SemiAnalysis/Pegatron 规格）
+// 2 块 Bianca 板（各 1 Grace + 2 Blackwell）+ 前部 E1.S 存储位 +
+// NIC mezz + DPU + 风扇排 + 后部 PDB/母排连接器/背板连接器
 // ============================================================
 function buildTray() {
   camera.position.set(0.9, 1.5, 1.9);
   controls.target.set(0, 0.25, 0);
-  setCaption('GB200 计算托盘 ×18/柜 · 每托盘 2 组超级芯片（各 1 Grace CPU + 2 B200 GPU） · 点击部件看详情');
+  setCaption('GB200 计算托盘 ×18/柜 · 2 块 Bianca 板（各 1 Grace + 2 B200）· 6.3kW/托盘 · 后段液冷 85% + 前段风冷 15%');
 
   const ground = new THREE.Mesh(new THREE.BoxGeometry(6, 0.05, 5), mat(M.floor));
   ground.position.y = -0.03;
   levelGroup.add(ground);
 
-  // 托盘底盘
-  const chassis = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.06, 1.8), mat(M.darkMetal));
+  // 托盘底盘（前 z+ 后 z-）
+  const chassis = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.06, 1.9), mat(M.darkMetal));
   chassis.position.y = 0.03;
   levelGroup.add(chassis);
   makePickable(chassis, 'rack-frame');
 
-  // 主板 PCB
-  const board = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.04, 1.6), mat(M.pcb));
-  board.position.y = 0.08;
-  levelGroup.add(board);
-  makePickable(board, 'pcb');
-
-  // 2 个 GB200 超级芯片模组：每个 = 1 CPU + 2 GPU
-  // 布局：左右两个模组
+  // ===== 后段（z: -0.9 ~ 0.1）：2 块 Bianca 板（液冷区）=====
   [-0.62, 0.62].forEach(mx => {
-    // CPU（Grace）
+    // Bianca 板
+    const board = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.04, 0.95), mat(M.pcb));
+    board.position.set(mx, 0.08, -0.4);
+    levelGroup.add(board);
+    makePickable(board, 'pcb');
+
+    // Grace CPU（板后部中央）
     const cpuG = new THREE.Group();
-    const cpu = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.05, 0.3), mat(M.chipDark));
-    cpu.position.set(mx, 0.13, -0.45);
+    const cpu = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.05, 0.28), mat(M.chipDark));
+    cpu.position.set(mx, 0.125, -0.7);
     cpuG.add(cpu);
-    // LPDDR 颗粒围一圈
     for (let i = 0; i < 6; i++) {
-      const d = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.03, 0.12), mat(M.green));
-      d.position.set(mx - 0.25 + (i % 3) * 0.25, 0.12, -0.45 + (i < 3 ? -0.26 : 0.26));
+      const d = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.03, 0.1), mat(M.green));
+      d.position.set(mx - 0.22 + (i % 3) * 0.22, 0.115, -0.7 + (i < 3 ? -0.2 : 0.2));
       cpuG.add(d);
     }
     levelGroup.add(cpuG);
     makePickable(cpuG, 'cpu');
 
-    // 2 颗 GPU
-    [0.0, 0.5].forEach(gz => {
+    // 2 颗 B200 GPU（板前部并排）
+    [-0.2, 0.24].forEach(dx => {
       const gpuG = new THREE.Group();
-      // GPU 双 die
-      const die1 = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.05, 0.2), mat(M.chipGold));
-      die1.position.set(mx - 0.09, 0.13, gz);
-      const die2 = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.05, 0.2), mat(M.chipGold));
-      die2.position.set(mx + 0.09, 0.13, gz);
-      gpuG.add(die1, die2);
-      // 基板
-      const sub = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.03, 0.42), mat(M.chipDark));
-      sub.position.set(mx, 0.105, gz);
+      const sub = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.03, 0.30), mat(M.chipDark));
+      sub.position.set(mx + dx, 0.10, -0.18);
       gpuG.add(sub);
+      [-0.06, 0.06].forEach(ddx => {
+        const die = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.05, 0.14), mat(M.chipGold));
+        die.position.set(mx + dx + ddx, 0.13, -0.18);
+        gpuG.add(die);
+      });
       levelGroup.add(gpuG);
       makePickable(gpuG, 'gpu');
 
-      // HBM 8 颗围在 die 两侧
+      // HBM 围两侧
       const hbmG = new THREE.Group();
       for (let i = 0; i < 4; i++) {
-        const h1 = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.06, 0.085), mat(M.hbm));
-        h1.position.set(mx - 0.215, 0.135, gz - 0.15 + i * 0.1);
-        const h2 = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.06, 0.085), mat(M.hbm));
-        h2.position.set(mx + 0.215, 0.135, gz - 0.15 + i * 0.1);
-        hbmG.add(h1, h2);
+        [-0.145, 0.145].forEach(hx => {
+          const h = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.06, 0.055), mat(M.hbm));
+          h.position.set(mx + dx + hx, 0.135, -0.28 + i * 0.07);
+          hbmG.add(h);
+        });
       }
       levelGroup.add(hbmG);
       makePickable(hbmG, 'hbm');
     });
 
-    // 冷板：盖在每个模组上方（半透明，能看到下面芯片）
+    // 冷板（覆盖整块 Bianca 板，半透明）
     const cp = new THREE.Group();
-    const plate = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.04, 1.25),
-      new THREE.MeshStandardMaterial({ color: 0xb87333, transparent: true, opacity: 0.35, metalness: 0.7, roughness: 0.3 }));
-    plate.position.set(mx, 0.22, 0.05);
+    const plate = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.04, 0.9),
+      new THREE.MeshStandardMaterial({ color: 0xb87333, transparent: true, opacity: 0.32, metalness: 0.7, roughness: 0.3 }));
+    plate.position.set(mx, 0.21, -0.4);
     cp.add(plate);
-    // 进出水软管
-    const hose1 = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.5), mat(M.blue));
-    hose1.rotation.x = Math.PI / 2;
-    hose1.position.set(mx - 0.1, 0.24, -0.85);
-    const hose2 = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.5), mat(M.red));
-    hose2.rotation.x = Math.PI / 2;
-    hose2.position.set(mx + 0.1, 0.24, -0.85);
+    const hose1 = pipe([mx - 0.1, 0.23, -0.85], [mx - 0.1, 0.23, -1.0], 0.025, mat(M.blue));
+    const hose2 = pipe([mx + 0.1, 0.23, -0.85], [mx + 0.1, 0.23, -1.0], 0.025, mat(M.red));
     cp.add(hose1, hose2);
     levelGroup.add(cp);
     makePickable(cp, 'coldplate');
+
+    // MLCC 散布
+    const mlccG = new THREE.Group();
+    const mlccGeo = new THREE.BoxGeometry(0.02, 0.013, 0.013);
+    for (let i = 0; i < 70; i++) {
+      const m = new THREE.Mesh(mlccGeo, mat(M.chipDark));
+      m.material.color = new THREE.Color(0x97700f);
+      const ang = Math.random() * Math.PI * 2;
+      const r = 0.18 + Math.random() * 0.26;
+      m.position.set(mx + Math.cos(ang) * r * 0.8, 0.105, -0.4 + Math.sin(ang) * r);
+      mlccG.add(m);
+    }
+    levelGroup.add(mlccG);
+    makePickable(mlccG, 'mlcc');
   });
 
-  // NIC（ConnectX 小卡，前缘）
+  // ===== 中段：风扇排（液冷/风冷分界）=====
+  const fanG = new THREE.Group();
+  for (let i = 0; i < 8; i++) {
+    const f = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.05, 14), mat(M.darkMetal));
+    f.rotation.x = Math.PI / 2;
+    f.position.set(-1.0 + i * 0.29, 0.13, 0.18);
+    fanG.add(f);
+  }
+  levelGroup.add(fanG);
+  makePickable(fanG, 'fan');
+
+  // ===== 前段（z: 0.3 ~ 0.95，风冷区）：NIC + DPU + E1.S 存储 + OSFP =====
+  // 4 张 ConnectX mezz
   const nicG = new THREE.Group();
-  [-0.95, -0.75].forEach(x => {
-    const nic = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.03, 0.3), mat(M.green));
-    nic.position.set(x, 0.115, 0.6);
+  [-0.95, -0.7, 0.7, 0.95].forEach(x => {
+    const nic = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.03, 0.3), mat(M.green));
+    nic.position.set(x, 0.11, 0.45);
     nicG.add(nic);
   });
   levelGroup.add(nicG);
   makePickable(nicG, 'nic');
 
-  // DPU（BlueField，前缘另一侧）
+  // 2 颗 BlueField-3
   const dpuG = new THREE.Group();
-  const dpu = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.04, 0.3), mat(M.chipDark));
-  dpu.position.set(0.9, 0.12, 0.6);
-  dpuG.add(dpu);
+  [-0.3, 0.3].forEach(x => {
+    const dpu = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.04, 0.28), mat(M.chipDark));
+    dpu.position.set(x, 0.115, 0.45);
+    dpuG.add(dpu);
+  });
   levelGroup.add(dpuG);
   makePickable(dpuG, 'dpu');
 
-  // MLCC：芯片周围撒一片小点
-  const mlccG = new THREE.Group();
-  const mlccGeo = new THREE.BoxGeometry(0.022, 0.014, 0.014);
-  for (let i = 0; i < 160; i++) {
-    const m = new THREE.Mesh(mlccGeo, mat(M.chipDark));
-    m.material.color = new THREE.Color(0x97700f);
-    const ang = Math.random() * Math.PI * 2;
-    const r = 0.32 + Math.random() * 0.42;
-    const cx = Math.random() < 0.5 ? -0.62 : 0.62;
-    m.position.set(cx + Math.cos(ang) * r * 0.7, 0.105, 0.05 + Math.sin(ang) * r * 0.8);
-    mlccG.add(m);
+  // 8 个 E1.S 存储位（前面板左侧，小竖条）
+  const ssdG = new THREE.Group();
+  for (let i = 0; i < 8; i++) {
+    const s = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.11, 0.3), mat(M.ssd));
+    s.position.set(-1.05 + i * 0.085, 0.12, 0.78);
+    ssdG.add(s);
   }
-  levelGroup.add(mlccG);
-  makePickable(mlccG, 'mlcc');
+  levelGroup.add(ssdG);
+  makePickable(ssdG, 'e1s-storage');
 
-  // 前面板 + OSFP 笼
+  // 前面板 + OSFP 笼（右侧）
   const osfpG = new THREE.Group();
   const faceplate = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.16, 0.04), mat(M.darkMetal));
-  faceplate.position.set(0, 0.12, 0.92);
+  faceplate.position.set(0, 0.12, 0.97);
   osfpG.add(faceplate);
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < 6; i++) {
     const cage = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.07, 0.1), mat(M.metal));
-    cage.position.set(-0.85 + i * 0.24, 0.12, 0.95);
+    cage.position.set(0.05 + i * 0.19, 0.12, 1.0);
     osfpG.add(cage);
   }
   levelGroup.add(osfpG);
   makePickable(osfpG, 'osfp');
 
-  // 背板连接器（托盘后缘）
+  // 后缘：母排连接器（中央）+ 背板连接器
+  const busG = new THREE.Group();
+  const busConn = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.1, 0.07), mat(M.copper));
+  busConn.position.set(0, 0.12, -0.92);
+  busG.add(busConn);
+  levelGroup.add(busG);
+  makePickable(busG, 'busbar');
+
   const bpcG = new THREE.Group();
-  for (let i = 0; i < 6; i++) {
-    const c = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.1, 0.08), mat(M.copper));
-    c.position.set(-0.75 + i * 0.3, 0.12, -0.86);
+  [-0.75, -0.45, 0.45, 0.75].forEach(x => {
+    const c = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.1, 0.07), mat(M.copper));
+    c.material.color = new THREE.Color(0x8a5a28);
+    c.position.set(x, 0.12, -0.92);
     bpcG.add(c);
-  }
+  });
   levelGroup.add(bpcG);
   makePickable(bpcG, 'backplane-connector');
 
-  addLabel('前面板 →', 0, 0.45, 1.15, 0.3);
+  addLabel('后：Bianca×2 (液冷)', 0, 0.85, -0.9, 0.3);
+  addLabel('前：NIC/DPU/E1.S (风冷)', 0, 0.75, 0.85, 0.3);
 }
 
 // ============================================================
@@ -747,7 +876,7 @@ function buildTray() {
 function buildSwitchTray() {
   camera.position.set(0.8, 1.4, 1.8);
   controls.target.set(0, 0.2, 0);
-  setCaption('NVSwitch 托盘 ×9/柜 · 每托盘 2 颗 NVSwitch 芯片，把 72 颗 GPU 连成一台"大 GPU"');
+  setCaption('NVSwitch 托盘 ×9/柜 · 每托盘 2 颗 28.8Tb/s NVSwitch5 · NVL72 柜内交换不需要光模块');
 
   const ground = new THREE.Mesh(new THREE.BoxGeometry(6, 0.05, 5), mat(M.floor));
   ground.position.y = -0.03;
@@ -763,7 +892,6 @@ function buildSwitchTray() {
   levelGroup.add(board);
   makePickable(board, 'pcb');
 
-  // 2 颗 NVSwitch 芯片
   [-0.5, 0.5].forEach(x => {
     const chipG = new THREE.Group();
     const chip = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.06, 0.4), mat(M.chipGold));
@@ -777,28 +905,106 @@ function buildSwitchTray() {
     makePickable(chipG, 'nvswitch-chip');
   });
 
-  // 背板连接器：后缘一整排（NVSwitch 托盘的连接器最密集）
+  // 后缘 4 个 144DP 背板连接器
   const bpcG = new THREE.Group();
-  for (let i = 0; i < 9; i++) {
-    const c = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.12, 0.1), mat(M.copper));
-    c.position.set(-0.95 + i * 0.24, 0.13, -0.85);
+  [-0.8, -0.3, 0.3, 0.8].forEach(x => {
+    const c = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.12, 0.1), mat(M.copper));
+    c.position.set(x, 0.13, -0.82);
     bpcG.add(c);
-  }
+  });
   levelGroup.add(bpcG);
   makePickable(bpcG, 'backplane-connector');
+}
 
+// ============================================================
+// 第 4 层：集群网络（8 柜 = 1 个 SuperPOD scalable unit）
+// ============================================================
+function buildCluster() {
+  camera.position.set(10, 8, 14);
+  controls.target.set(0, 2, 0);
+  setCaption('集群网络：8× NVL72 = 1 个 DGX SuperPOD 可扩展单元 · 柜内=NVLink 铜缆（蓝光柜体）· 柜间=光纤上行到 leaf/spine');
+
+  const ground = new THREE.Mesh(new THREE.BoxGeometry(30, 0.1, 20), mat(M.floor));
+  ground.position.y = -0.05;
+  levelGroup.add(ground);
+
+  // 8 个 NVL72 机柜成排
+  const rackXs = [];
+  const nvDomain = new THREE.Group();
+  for (let i = 0; i < 8; i++) {
+    const x = -8.4 + i * 2.4;
+    rackXs.push(x);
+    const r = new THREE.Mesh(new THREE.BoxGeometry(1.3, 3.4, 2.0), mat(M.darkMetal));
+    r.position.set(x, 1.7, 2.5);
+    nvDomain.add(r);
+    const led = new THREE.Mesh(new THREE.BoxGeometry(1.0, 2.8, 0.05), mat(M.blue));
+    led.material.emissive = new THREE.Color(0x2563eb);
+    led.material.emissiveIntensity = 0.45;
+    led.position.set(x, 1.7, 3.53);
+    nvDomain.add(led);
+  }
+  levelGroup.add(nvDomain);
+  makePickable(nvDomain, 'nvlink-domain');
+
+  // leaf 交换机排（中间层）
+  const leafG = new THREE.Group();
+  const leafXs = [-6, -2, 2, 6];
+  leafXs.forEach(x => {
+    const sw = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.5, 1.2), mat(M.metal));
+    sw.position.set(x, 4.8, -1.5);
+    leafG.add(sw);
+  });
+  levelGroup.add(leafG);
+  makePickable(leafG, 'ib-fabric');
+
+  // spine 交换机排（顶层）
+  const spineG = new THREE.Group();
+  [-3, 3].forEach(x => {
+    const sw = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.5, 1.2), mat(M.grayBox));
+    sw.position.set(x, 7.0, -4.5);
+    spineG.add(sw);
+  });
+  levelGroup.add(spineG);
+  makePickable(spineG, 'ib-fabric');
+
+  // 光纤连线：每柜→最近2台leaf，leaf→每台spine
+  const fiberG = new THREE.Group();
+  const fiberMat = new THREE.MeshStandardMaterial({ color: 0xd4a017, emissive: 0xd4a017, emissiveIntensity: 0.3, roughness: 0.5 });
+  rackXs.forEach((rx, i) => {
+    const targets = [leafXs[Math.floor(i / 2)], leafXs[(Math.floor(i / 2) + 1) % 4]];
+    targets.forEach(lx => {
+      fiberG.add(pipe([rx, 3.4, 2.0], [lx, 4.6, -1.2], 0.018, fiberMat));
+    });
+  });
+  leafXs.forEach(lx => {
+    [-3, 3].forEach(sx => {
+      fiberG.add(pipe([lx, 5.05, -1.6], [sx, 6.8, -4.2], 0.018, fiberMat));
+    });
+  });
+  levelGroup.add(fiberG);
+  makePickable(fiberG, 'cluster-optics');
+
+  addLabel('8× NVL72（每柜内部 = NVLink 域，纯铜缆）', 0, 0.4, 4.6, 0.55);
+  addLabel('Leaf 交换机', -8.6, 4.8, -1.5, 0.45);
+  addLabel('Spine', -6, 7.0, -4.5, 0.45);
+  addLabel('金线 = 光纤/光模块', 8.2, 5.8, -2.5, 0.45);
 }
 
 // ============================================================
 // 交互：hover / click / 双击进入
 // ============================================================
+function resolveInfo(id) {
+  if (id.startsWith('zone:')) return CAMPUS_ZONES.find(z => z.id === id.slice(5));
+  if (id.startsWith('comp:')) return COMPONENTS[id.slice(5)];
+  return COMPONENTS[id];
+}
+
 function pick(e) {
   pointer.x = (e.clientX / innerWidth) * 2 - 1;
   pointer.y = -(e.clientY / innerHeight) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
   const hits = raycaster.intersectObjects(pickables, true);
   if (!hits.length) return null;
-  // 找到注册过的顶层对象；玻璃外壳(zone:land)是包围体，优先选它内部的东西
   let fallback = null;
   for (const h of hits) {
     let obj = h.object;
@@ -819,12 +1025,9 @@ renderer.domElement.addEventListener('pointermove', e => {
     document.body.style.cursor = hovered ? 'pointer' : 'default';
   }
   if (hovered) {
-    const id = hovered.userData.id;
-    const info = id.startsWith('zone:')
-      ? CAMPUS_ZONES.find(z => z.id === id.slice(5))
-      : COMPONENTS[id];
+    const info = resolveInfo(hovered.userData.id);
     if (info) {
-      const val = id.startsWith('zone:') ? info.perRackK : info.value?.perRackK;
+      const val = info.perRackK != null ? info.perRackK : info.value?.perRackK;
       tooltip.innerHTML = info.name + (val != null ? `<span class="tv">$${val >= 1000 ? (val/1000).toFixed(2) + 'M' : val + 'K'}/柜</span>` : '');
       tooltip.style.display = 'block';
       tooltip.style.left = (e.clientX + 14) + 'px';
@@ -837,12 +1040,13 @@ renderer.domElement.addEventListener('pointermove', e => {
 
 renderer.domElement.addEventListener('click', e => {
   const obj = pick(e);
-  if (!obj) { return; }
+  if (!obj) return;
   if (selected) setEmissive(selected, 0x000000, 0);
   selected = obj;
   setEmissive(selected, 0x58a6ff, 0.7);
   const id = obj.userData.id;
   if (id.startsWith('zone:')) panelForZone(id.slice(5));
+  else if (id.startsWith('comp:')) panelForComponent(id.slice(5));
   else panelForComponent(id);
 });
 
@@ -851,8 +1055,9 @@ renderer.domElement.addEventListener('dblclick', e => {
   if (!obj) return;
   const id = obj.userData.id;
   if (id === 'zone:whitespace') goto('rack');
-  else if (id === 'compute-tray') goto('tray');
+  else if (id === 'compute-tray' && (currentRackType === 'gb200' || currentRackType === 'gb300' || currentRackType === 'rubin')) goto('tray');
   else if (id === 'nvswitch-tray') goto('switchTray');
+  else if (id === 'network-rack') goto('cluster');
 });
 
 // ---------- 渲染循环 ----------
@@ -860,7 +1065,6 @@ const clock = new THREE.Clock();
 function animate() {
   requestAnimationFrame(animate);
   controls.update();
-  // 可进入对象呼吸发光
   const t = clock.getElapsedTime();
   const glow = 0.12 + Math.sin(t * 2.2) * 0.08;
   pulseSet.forEach(o => {
