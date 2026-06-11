@@ -313,9 +313,9 @@ function pipe(p1, p2, radius, material) {
 //       右侧=冷却链路（白区 CDU→冷机→冷却塔）
 // ============================================================
 function buildCampus() {
-  camera.position.set(36, 28, 40);
-  controls.target.set(0, 2, 0);
-  setCaption('数据中心全景 · GB200 口径 $40.5B/GW（VR $47.3B） · 左=电力链路 右=冷却链路 · 双击机房白区进入机柜层');
+  camera.position.set(20, 32, 50);
+  controls.target.set(-4, 2, -8);
+  setCaption('数据中心全景 · GB200 口径 $40.5B/GW（VR $47.3B） · 前=电力链路（8 段）右=冷却链路 · 双击机房白区进入机柜层');
 
   const ground = new THREE.Mesh(new THREE.BoxGeometry(100, 0.5, 70), mat(M.floor));
   ground.position.y = -0.25;
@@ -354,56 +354,93 @@ function buildCampus() {
   levelGroup.add(whitespace);
   makePickable(whitespace, 'zone:whitespace', true);
 
-  // ============ 电力链路（左侧，从远到近：柴发→变压器→开关柜/UPS→白区）============
-  // 柴发阵列
+  // ============ 电力链路：8 段链条（按 SemiAnalysis Datacenter Anatomy Part 1）============
+  // 布局从外到内、从远到近，全部摆在白区前侧（z 负方向）形成可视链条
+  //   外: substation(HV→MV) → MV switchgear → MV transformer
+  //       柴发挂 ATS 旁
+  //   内: ATS → LV switchgear → UPS+BBU → STS → 白区
+  // 每个节点是一个可点击的小区块，节点之间黄色管线表示电流流向
+  const powerChain = new THREE.Group();
+  const pl = mat(M.chipGold); pl.color = new THREE.Color(0xb8860b);
+
+  // 链路节点位置（z 是从远到近排布）
+  const chainZ = -16;        // 电力链路所在的横排 z 坐标
+  const stations = [
+    { id: 'comp:substation',     x: -42, color: 0x6b7280, w: 4.5, h: 3.0, d: 2.6, label: '现场变电站\nHV→MV' },
+    { id: 'comp:mv-switchgear',  x: -34, color: 0x4b5563, w: 2.5, h: 2.4, d: 1.6, label: '中压开关柜' },
+    { id: 'comp:mv-transformer', x: -28, color: 0x6b7280, w: 2.6, h: 2.6, d: 2.0, label: '中压变压器\n2.5MVA' },
+    { id: 'comp:ats',            x: -22, color: 0x6b7280, w: 1.6, h: 2.2, d: 1.4, label: 'ATS' },
+    { id: 'comp:lv-switchgear',  x: -16, color: 0x4b5563, w: 2.4, h: 2.2, d: 1.4, label: '低压开关柜' },
+    { id: 'comp:ups',            x:  -8, color: 0x9ca3af, w: 2.6, h: 2.4, d: 1.6, label: 'UPS' },
+    { id: 'comp:sts',            x:  -2, color: 0x6b7280, w: 1.4, h: 2.0, d: 1.2, label: 'STS' },
+  ];
+
+  stations.forEach((s, i) => {
+    const node = new THREE.Group();
+    const body = new THREE.Mesh(
+      new THREE.BoxGeometry(s.w, s.h, s.d),
+      new THREE.MeshStandardMaterial({ color: s.color, roughness: 0.6, metalness: 0.3 })
+    );
+    body.position.set(s.x, s.h / 2 + 0.05, chainZ);
+    node.add(body);
+    // 顶部小指示灯（黄色，强调"通电中"）
+    const led = new THREE.Mesh(
+      new THREE.BoxGeometry(s.w * 0.5, 0.06, s.d * 0.3),
+      new THREE.MeshStandardMaterial({ color: 0xfbbf24, emissive: 0xfbbf24, emissiveIntensity: 0.4 })
+    );
+    led.position.set(s.x, s.h + 0.08, chainZ);
+    node.add(led);
+    powerChain.add(node);
+    makePickable(node, s.id);
+    addLabel(s.label.replace('\n', ' · '), s.x, s.h + 0.7, chainZ, 0.4);
+    // 节点之间画黄色连线
+    if (i > 0) {
+      const prev = stations[i - 1];
+      powerChain.add(pipe([prev.x + prev.w / 2, 0.6, chainZ], [s.x - s.w / 2, 0.6, chainZ], 0.12, pl));
+    }
+  });
+  // 链路末端→白区入口
+  powerChain.add(pipe([-2 + 0.7, 0.6, chainZ], [-12, 0.6, -10.5], 0.12, pl));
+  levelGroup.add(powerChain);
+
+  // 柴发：挂在 ATS 北侧（远离白区那侧）
   const gens = new THREE.Group();
-  for (let i = 0; i < 5; i++) {
-    const g = new THREE.Mesh(new THREE.BoxGeometry(5.5, 2.8, 2.4), mat(M.chipGold));
+  for (let i = 0; i < 4; i++) {
+    const g = new THREE.Mesh(new THREE.BoxGeometry(3.6, 2.4, 2.2), mat(M.chipGold));
     g.material.color = new THREE.Color(0x8a6d1a);
-    g.position.set(-44, 1.4, -16 + i * 7);
+    g.position.set(-30 + i * 4.2, 1.2, -22);
     gens.add(g);
-    const pipeM = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 1.6), mat(M.darkMetal));
-    pipeM.position.set(-44 + 1.8, 3.6, -16 + i * 7);
-    gens.add(pipeM);
+    const exhaust = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 1.4), mat(M.darkMetal));
+    exhaust.position.set(-30 + i * 4.2 + 1.2, 3.1, -22);
+    gens.add(exhaust);
   }
   levelGroup.add(gens);
   makePickable(gens, 'zone:generators');
+  addLabel('柴发阵列（N+1，2-3MW/台，启动 60s）', -22, 3.4, -22, 0.5);
+  // 柴发→ATS 的支线（虚线感：用细黄色）
+  powerChain.add(pipe([-22, 0.6, -22], [-22, 0.6, chainZ + 0.7], 0.08, pl));
 
-  // 变压器排
-  const power = new THREE.Group();
-  for (let i = 0; i < 3; i++) {
-    const tr = new THREE.Mesh(new THREE.BoxGeometry(3.0, 3, 2.6), mat(M.grayBox));
-    tr.position.set(-34, 1.5, -8 + i * 6);
-    power.add(tr);
-    const fin = new THREE.Mesh(new THREE.BoxGeometry(0.3, 2.4, 2.2), mat(M.metal));
-    fin.position.set(-32.3, 1.5, -8 + i * 6);
-    power.add(fin);
-  }
-  // 开关柜一排（贴建筑）
-  for (let i = 0; i < 4; i++) {
-    const sg = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.4, 1.2), mat(M.metal));
-    sg.position.set(-28.5, 1.2, -7 + i * 3.4);
-    power.add(sg);
-  }
-  levelGroup.add(power);
-  makePickable(power, 'zone:power-distribution');
+  // BBU 走机柜内（在白区旁加个示意小标签）
+  addLabel('BBU 直接进机柜（绕过 UPS） →', -10, 0.4, -8, 0.42);
 
-  // UPS 室（建筑内左缘）
-  const ups = new THREE.Group();
-  for (let i = 0; i < 3; i++) {
-    const u = new THREE.Mesh(new THREE.BoxGeometry(1.6, 2.6, 1.4), mat(M.white));
-    u.position.set(-23, 1.3, 8 - i * 2.6);
-    ups.add(u);
-  }
-  levelGroup.add(ups);
-  makePickable(ups, 'zone:backup-power');
+  // 整体 power-distribution 区域加一个大透明罩，让用户能整体点击看汇总
+  const pdHullGeo = new THREE.BoxGeometry(46, 0.1, 4);
+  const pdHull = new THREE.Mesh(
+    pdHullGeo,
+    new THREE.MeshStandardMaterial({ color: 0xfbbf24, transparent: true, opacity: 0.05 })
+  );
+  pdHull.position.set(-22, 0.05, chainZ);
+  levelGroup.add(pdHull);
+  makePickable(pdHull, 'zone:power-distribution');
 
-  // 电力链路连线（黄色粗线，示意电流方向）
-  const pl = mat(M.chipGold); pl.color = new THREE.Color(0xb8860b);
-  levelGroup.add(pipe([-41, 1.2, 0], [-35.5, 1.2, 0], 0.12, pl));      // 柴发→变压器
-  levelGroup.add(pipe([-32.5, 1.2, 0], [-29, 1.2, 0], 0.12, pl));      // 变压器→开关柜
-  levelGroup.add(pipe([-28, 1.2, 2], [-24, 1.2, 5], 0.12, pl));        // 开关柜→UPS
-  levelGroup.add(pipe([-22, 1.2, 5], [-18, 1.2, 0], 0.12, pl));        // UPS→白区
+  // backup-power 区域罩
+  const bpHull = new THREE.Mesh(
+    new THREE.BoxGeometry(20, 0.1, 4),
+    new THREE.MeshStandardMaterial({ color: 0xfbbf24, transparent: true, opacity: 0.05 })
+  );
+  bpHull.position.set(-22, 0.05, -22);
+  levelGroup.add(bpHull);
+  makePickable(bpHull, 'zone:backup-power');
 
   // ============ 冷却链路（右侧：白区→CDU→冷机→冷却塔）============
   // CDU 排（建筑内右缘）
@@ -463,14 +500,11 @@ function buildCampus() {
 
   // 区域标签
   addLabel('机房白区', -4, 10.3, 0, 0.9);
-  addLabel('柴发', -44, 5.2, -2, 0.6);
-  addLabel('变压器/开关柜', -32, 5.2, -1, 0.6);
-  addLabel('UPS', -23, 4.6, 6, 0.55);
   addLabel('CDU', 15, 4.2, -3, 0.55);
   addLabel('冷机', 26, 4.8, -2.5, 0.55);
   addLabel('冷却塔', 38, 5.2, -3, 0.6);
   addLabel('储水', 32, 5.4, 13, 0.5);
-  addLabel('→ 电力链路 →', -33, 0.4, 9, 0.6);
+  addLabel('→ 8 段电力链路 →', -22, 0.4, -13, 0.7);
   addLabel('→ 冷却链路 →', 26, 0.4, 7, 0.6);
 }
 
