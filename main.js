@@ -100,13 +100,14 @@ const switcherEl = document.getElementById('rack-switcher');
 
 function setCaption(html) { captionEl.innerHTML = html || ''; }
 
-const VIEW_PARENT = { rack: 'campus', tray: 'rack', switchTray: 'rack', cluster: 'rack' };
+const VIEW_PARENT = { rack: 'campus', tray: 'rack', switchTray: 'rack', cluster: 'rack', optics: 'cluster' };
 const VIEW_LABEL = {
   campus: '数据中心全景',
   rack: () => RACK_TYPES[currentRackType].name,
   tray: '计算托盘内部',
   switchTray: 'NVSwitch 托盘内部',
   cluster: '集群网络',
+  optics: '光互联技术',
 };
 
 function clearLevel() {
@@ -129,6 +130,7 @@ function goto(v) {
   else if (v === 'tray') buildTray();
   else if (v === 'switchTray') buildSwitchTray();
   else if (v === 'cluster') buildCluster();
+  else if (v === 'optics') buildOptics();
   renderBreadcrumb();
   backBtn.style.display = v === 'campus' ? 'none' : 'block';
   switcherEl.style.display = (v === 'rack') ? 'flex' : 'none';
@@ -210,6 +212,7 @@ function panelForComponent(id) {
   if (c.action === 'enterTray') html += `<div class="enter-hint" onclick="window.__enter('tray')">⊕ 进入托盘内部</div>`;
   if (c.action === 'enterSwitchTray') html += `<div class="enter-hint" onclick="window.__enter('switchTray')">⊕ 进入交换托盘内部</div>`;
   if (c.action === 'enterCluster') html += `<div class="enter-hint" onclick="window.__enter('cluster')">⊕ 进入集群网络视图</div>`;
+  if (c.action === 'enterOptics') html += `<div class="enter-hint" onclick="window.__enter('optics')">⊕ 进入光互联技术视图</div>`;
   html += `<div class="conf">数据置信度：${c.conf}（A=报告表格原文 B=报告正文 C=待校准）<br>来源：${META.source}</div>`;
   showPanel(html);
 }
@@ -313,8 +316,8 @@ function pipe(p1, p2, radius, material) {
 //       右侧=冷却链路（白区 CDU→冷机→冷却塔）
 // ============================================================
 function buildCampus() {
-  camera.position.set(20, 32, 50);
-  controls.target.set(-4, 2, -8);
+  camera.position.set(0, 40, 64);
+  controls.target.set(-3, 0, 3);
   setCaption('数据中心全景 · GB200 口径 $40.5B/GW（VR $47.3B） · 前=电力链路（8 段）右=冷却链路 · 双击机房白区进入机柜层');
 
   const ground = new THREE.Mesh(new THREE.BoxGeometry(100, 0.5, 70), mat(M.floor));
@@ -363,16 +366,16 @@ function buildCampus() {
   const powerChain = new THREE.Group();
   const pl = mat(M.chipGold); pl.color = new THREE.Color(0xb8860b);
 
-  // 链路节点位置（z 是从远到近排布）
-  const chainZ = -16;        // 电力链路所在的横排 z 坐标
+  // 链路节点位置（建筑前方一字排开，从左到右流向白区）
+  const chainZ = 20;        // 电力链路所在的横排 z 坐标（建筑前方）
   const stations = [
-    { id: 'comp:substation',     x: -42, color: 0x6b7280, w: 4.5, h: 3.0, d: 2.6, label: '现场变电站\nHV→MV' },
-    { id: 'comp:mv-switchgear',  x: -34, color: 0x4b5563, w: 2.5, h: 2.4, d: 1.6, label: '中压开关柜' },
-    { id: 'comp:mv-transformer', x: -28, color: 0x6b7280, w: 2.6, h: 2.6, d: 2.0, label: '中压变压器\n2.5MVA' },
-    { id: 'comp:ats',            x: -22, color: 0x6b7280, w: 1.6, h: 2.2, d: 1.4, label: 'ATS' },
-    { id: 'comp:lv-switchgear',  x: -16, color: 0x4b5563, w: 2.4, h: 2.2, d: 1.4, label: '低压开关柜' },
-    { id: 'comp:ups',            x:  -8, color: 0x9ca3af, w: 2.6, h: 2.4, d: 1.6, label: 'UPS' },
-    { id: 'comp:sts',            x:  -2, color: 0x6b7280, w: 1.4, h: 2.0, d: 1.2, label: 'STS' },
+    { id: 'comp:substation',     x: -40, color: 0x6b7280, w: 4.5, h: 3.0, d: 2.6, label: '现场变电站 HV→MV' },
+    { id: 'comp:mv-switchgear',  x: -32, color: 0x4b5563, w: 2.5, h: 2.4, d: 1.6, label: '中压开关柜' },
+    { id: 'comp:mv-transformer', x: -26, color: 0x6b7280, w: 2.6, h: 2.6, d: 2.0, label: '中压变压器' },
+    { id: 'comp:ats',            x: -20, color: 0x6b7280, w: 1.6, h: 2.2, d: 1.4, label: 'ATS' },
+    { id: 'comp:lv-switchgear',  x: -14, color: 0x4b5563, w: 2.4, h: 2.2, d: 1.4, label: '低压开关柜' },
+    { id: 'comp:ups',            x:  -7, color: 0x9ca3af, w: 2.6, h: 2.4, d: 1.6, label: 'UPS' },
+    { id: 'comp:sts',            x:  -1, color: 0x6b7280, w: 1.4, h: 2.0, d: 1.2, label: 'STS' },
   ];
 
   stations.forEach((s, i) => {
@@ -392,44 +395,44 @@ function buildCampus() {
     node.add(led);
     powerChain.add(node);
     makePickable(node, s.id);
-    addLabel(s.label.replace('\n', ' · '), s.x, s.h + 0.7, chainZ, 0.4);
+    addLabel(s.label, s.x, s.h + 1.0, chainZ, 0.62);
     // 节点之间画黄色连线
     if (i > 0) {
       const prev = stations[i - 1];
       powerChain.add(pipe([prev.x + prev.w / 2, 0.6, chainZ], [s.x - s.w / 2, 0.6, chainZ], 0.12, pl));
     }
   });
-  // 链路末端→白区入口
-  powerChain.add(pipe([-2 + 0.7, 0.6, chainZ], [-12, 0.6, -10.5], 0.12, pl));
+  // 链路末端→白区入口（建筑前缘）
+  powerChain.add(pipe([-0.3, 0.6, chainZ], [-4, 0.6, 15.3], 0.12, pl));
   levelGroup.add(powerChain);
 
-  // 柴发：挂在 ATS 北侧（远离白区那侧）
+  // 柴发：挂在 ATS 前方（更靠观众一侧）
   const gens = new THREE.Group();
   for (let i = 0; i < 4; i++) {
     const g = new THREE.Mesh(new THREE.BoxGeometry(3.6, 2.4, 2.2), mat(M.chipGold));
     g.material.color = new THREE.Color(0x8a6d1a);
-    g.position.set(-30 + i * 4.2, 1.2, -22);
+    g.position.set(-28 + i * 4.2, 1.2, 27);
     gens.add(g);
     const exhaust = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 1.4), mat(M.darkMetal));
-    exhaust.position.set(-30 + i * 4.2 + 1.2, 3.1, -22);
+    exhaust.position.set(-28 + i * 4.2 + 1.2, 3.1, 27);
     gens.add(exhaust);
   }
   levelGroup.add(gens);
   makePickable(gens, 'zone:generators');
-  addLabel('柴发阵列（N+1，2-3MW/台，启动 60s）', -22, 3.4, -22, 0.5);
-  // 柴发→ATS 的支线（虚线感：用细黄色）
-  powerChain.add(pipe([-22, 0.6, -22], [-22, 0.6, chainZ + 0.7], 0.08, pl));
+  addLabel('柴发阵列（N+1 · 2-3MW/台 · 启动 60s）', -21, 4.6, 27, 0.62);
+  // 柴发→ATS 的支线
+  powerChain.add(pipe([-20, 0.6, 27], [-20, 0.6, chainZ + 0.7], 0.08, pl));
 
   // BBU 走机柜内（在白区旁加个示意小标签）
-  addLabel('BBU 直接进机柜（绕过 UPS） →', -10, 0.4, -8, 0.42);
+  addLabel('BBU 直接进机柜（绕过 UPS）→', -10, 1.2, 16.6, 0.5);
 
   // 整体 power-distribution 区域加一个大透明罩，让用户能整体点击看汇总
-  const pdHullGeo = new THREE.BoxGeometry(46, 0.1, 4);
+  const pdHullGeo = new THREE.BoxGeometry(44, 0.1, 4);
   const pdHull = new THREE.Mesh(
     pdHullGeo,
     new THREE.MeshStandardMaterial({ color: 0xfbbf24, transparent: true, opacity: 0.05 })
   );
-  pdHull.position.set(-22, 0.05, chainZ);
+  pdHull.position.set(-21, 0.05, chainZ);
   levelGroup.add(pdHull);
   makePickable(pdHull, 'zone:power-distribution');
 
@@ -438,7 +441,7 @@ function buildCampus() {
     new THREE.BoxGeometry(20, 0.1, 4),
     new THREE.MeshStandardMaterial({ color: 0xfbbf24, transparent: true, opacity: 0.05 })
   );
-  bpHull.position.set(-22, 0.05, -22);
+  bpHull.position.set(-21, 0.05, 27);
   levelGroup.add(bpHull);
   makePickable(bpHull, 'zone:backup-power');
 
@@ -504,7 +507,7 @@ function buildCampus() {
   addLabel('冷机', 26, 4.8, -2.5, 0.55);
   addLabel('冷却塔', 38, 5.2, -3, 0.6);
   addLabel('储水', 32, 5.4, 13, 0.5);
-  addLabel('→ 8 段电力链路 →', -22, 0.4, -13, 0.7);
+  addLabel('→ 8 段电力链路 →', -21, 0.4, 23.5, 0.8);
   addLabel('→ 冷却链路 →', 26, 0.4, 7, 0.6);
 }
 
@@ -1016,12 +1019,216 @@ function buildCluster() {
     });
   });
   levelGroup.add(fiberG);
-  makePickable(fiberG, 'cluster-optics');
+  makePickable(fiberG, 'cluster-optics', true);
 
   addLabel('8× NVL72（每柜内部 = NVLink 域，纯铜缆）', 0, 0.4, 4.6, 0.55);
   addLabel('Leaf 交换机', -8.6, 4.8, -1.5, 0.45);
   addLabel('Spine', -6, 7.0, -4.5, 0.45);
-  addLabel('金线 = 光纤/光模块', 8.2, 5.8, -2.5, 0.45);
+  addLabel('金线 = 光纤/光模块（双击看技术路线）', 8.2, 5.8, -2.5, 0.45);
+}
+
+// ============================================================
+// 第 5 层：光互联技术（可插拔 → LPO → NPO → CPO）
+// 四台交换机切面并排，展示光电转换位置不断向 ASIC 前移：
+// 电链路 几十cm → 数cm → 毫米，1.6T 端口 30W → 9W
+// ============================================================
+function buildOptics() {
+  camera.position.set(0, 11.5, 13);
+  controls.target.set(0, 0, -1.2);
+  setCaption('光互联四条路线 · 看光引擎（青色）的位置：前面板 → 前面板(无DSP) → ASIC 旁 → ASIC 上 · 1.6T 端口功耗 30W → 9W');
+
+  const ground = new THREE.Mesh(new THREE.BoxGeometry(26, 0.1, 16), mat(M.floor));
+  ground.position.y = -0.05;
+  levelGroup.add(ground);
+
+  // 通用：画一台交换机切面（开盖俯视）
+  // 返回 {group, asicPos}，front 在 +z
+  const SW_W = 4.2, SW_D = 4.4;
+  function switchChassis(cx, schemeId) {
+    const g = new THREE.Group();
+    // 底板
+    const base = new THREE.Mesh(new THREE.BoxGeometry(SW_W, 0.08, SW_D), mat(M.darkMetal));
+    base.position.set(cx, 0.04, -1);
+    g.add(base);
+    // 三面围墙（front 开口朝观众）
+    const wallM = mat(M.metal);
+    const wallBack = new THREE.Mesh(new THREE.BoxGeometry(SW_W, 0.5, 0.08), wallM);
+    wallBack.position.set(cx, 0.33, -1 - SW_D / 2);
+    g.add(wallBack);
+    [-1, 1].forEach(s => {
+      const wallSide = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.5, SW_D), mat(M.metal));
+      wallSide.position.set(cx + s * SW_W / 2, 0.33, -1);
+      g.add(wallSide);
+    });
+    // 前面板（薄板）
+    const face = new THREE.Mesh(new THREE.BoxGeometry(SW_W, 0.55, 0.07), mat(M.chipDark));
+    face.position.set(cx, 0.33, -1 + SW_D / 2);
+    g.add(face);
+    levelGroup.add(g);
+    makePickable(g, schemeId);
+    return { cx, faceZ: -1 + SW_D / 2 };
+  }
+
+  // ASIC：交换芯片（金色大方块 + 标签）
+  function asic(cx, z) {
+    const a = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.16, 1.0), mat(M.chipGold));
+    a.material.emissive = new THREE.Color(0xd4a017);
+    a.material.emissiveIntensity = 0.25;
+    a.position.set(cx, 0.16, z);
+    levelGroup.add(a);
+    return a;
+  }
+  // 电链路走线（颜色按长短：长=红 热损耗大，短=绿）
+  function trace(cx, z1, z2, color, n = 5) {
+    const m = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.25, roughness: 0.6 });
+    for (let i = 0; i < n; i++) {
+      const x = cx - 0.5 + i * (1.0 / (n - 1));
+      levelGroup.add(pipe([x, 0.1, z1], [x, 0.1, z2], 0.018, m));
+    }
+  }
+
+  const ASIC_Z = -2.4;
+  const colLong = 0xb91c1c, colMid = 0xd97706, colShort = 0x16a34a;
+
+  // ===== 方案① 可插拔（最左）=====
+  {
+    const { cx, faceZ } = switchChassis(-7.8, 'optics-pluggable');
+    asic(cx, ASIC_Z);
+    trace(cx, ASIC_Z + 0.55, faceZ - 0.25, colLong);
+    // 前面板 6 个光模块，DSP（金色块）顶置展示
+    const dsps = new THREE.Group();
+    const mods = new THREE.Group();
+    for (let i = 0; i < 6; i++) {
+      const x = cx - 1.4 + i * 0.56;
+      const mod = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.18, 0.6), mat(M.metal));
+      mod.position.set(x, 0.33, faceZ + 0.25);
+      mods.add(mod);
+      const dsp = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.1, 0.24), mat(M.chipGold));
+      dsp.material.emissive = new THREE.Color(0xd4a017);
+      dsp.material.emissiveIntensity = 0.3;
+      dsp.position.set(x, 0.48, faceZ + 0.25);
+      dsps.add(dsp);
+    }
+    levelGroup.add(mods, dsps);
+    makePickable(mods, 'optics-pluggable');
+    makePickable(dsps, 'opt-dsp');
+    addLabel('① 可插拔 (DSP)', cx, 2.6, -1, 0.55);
+    addLabel('1.6T口 ~30W · 现在的主力', cx, 2.0, -1, 0.38);
+    addLabel('金块=DSP', cx + 1.6, 1.0, faceZ + 0.3, 0.28);
+  }
+
+  // ===== 方案② LPO =====
+  {
+    const { cx, faceZ } = switchChassis(-2.6, 'optics-lpo');
+    asic(cx, ASIC_Z);
+    trace(cx, ASIC_Z + 0.55, faceZ - 0.25, colMid);
+    const mods = new THREE.Group();
+    for (let i = 0; i < 6; i++) {
+      const x = cx - 1.4 + i * 0.56;
+      const mod = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.18, 0.6), mat(M.metal));
+      mod.position.set(x, 0.33, faceZ + 0.25);
+      mods.add(mod);
+      // 只有小小的 Driver/TIA（绿色），没有 DSP
+      const drv = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.12), mat(M.green));
+      drv.material.emissive = new THREE.Color(0x16a34a);
+      drv.material.emissiveIntensity = 0.4;
+      drv.position.set(x, 0.46, faceZ + 0.25);
+      mods.add(drv);
+    }
+    levelGroup.add(mods);
+    makePickable(mods, 'optics-lpo');
+    addLabel('② LPO (去 DSP)', cx, 2.6, -1, 0.55);
+    addLabel('-30~50% 功耗 · 保住可插拔', cx, 2.0, -1, 0.38);
+    addLabel('绿点=Driver/TIA', cx + 1.6, 1.0, faceZ + 0.3, 0.28);
+  }
+
+  // ===== 方案③ NPO =====
+  {
+    const { cx, faceZ } = switchChassis(2.6, 'optics-npo');
+    asic(cx, ASIC_Z);
+    // 光引擎搬到 ASIC 附近（青色小块，围一圈但有距离）
+    const engines = new THREE.Group();
+    const engM = new THREE.MeshStandardMaterial({ color: 0x06b6d4, emissive: 0x06b6d4, emissiveIntensity: 0.3, roughness: 0.4 });
+    [[-1.0, ASIC_Z], [1.0, ASIC_Z], [-1.0, ASIC_Z + 1.0], [1.0, ASIC_Z + 1.0]].forEach(([dx, z]) => {
+      const e = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.12, 0.35), engM.clone());
+      e.position.set(cx + dx, 0.14, z);
+      engines.add(e);
+    });
+    levelGroup.add(engines);
+    makePickable(engines, 'opt-engine');
+    // 短电链路（ASIC→引擎）
+    trace(cx, ASIC_Z, ASIC_Z + 0.0, colShort, 0); // 占位不画
+    const shortM = new THREE.MeshStandardMaterial({ color: colMid, emissive: colMid, emissiveIntensity: 0.25 });
+    [[-1.0], [1.0]].forEach(([dx]) => {
+      levelGroup.add(pipe([cx + dx * 0.45, 0.1, ASIC_Z], [cx + dx * 0.82, 0.1, ASIC_Z], 0.02, shortM));
+    });
+    // 光纤从引擎到前面板（青色细线）
+    const fibM = new THREE.MeshStandardMaterial({ color: 0x67e8f9, emissive: 0x67e8f9, emissiveIntensity: 0.3 });
+    [[-1.0, ASIC_Z], [1.0, ASIC_Z], [-1.0, ASIC_Z + 1.0], [1.0, ASIC_Z + 1.0]].forEach(([dx, z]) => {
+      levelGroup.add(pipe([cx + dx, 0.16, z + 0.18], [cx + dx * 0.5, 0.16, faceZ], 0.012, fibM.clone()));
+    });
+    // 前面板光纤口
+    const ports = new THREE.Group();
+    for (let i = 0; i < 8; i++) {
+      const p = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.1, 0.06), mat(M.ssd));
+      p.position.set(cx - 1.5 + i * 0.43, 0.33, faceZ + 0.06);
+      ports.add(p);
+    }
+    levelGroup.add(ports);
+    makePickable(ports, 'opt-mpo');
+    addLabel('③ NPO (近封装)', cx, 2.6, -1, 0.55);
+    addLabel('光引擎搬进机箱 · 过渡方案', cx, 2.0, -1, 0.38);
+  }
+
+  // ===== 方案④ CPO（最右）=====
+  {
+    const { cx, faceZ } = switchChassis(7.8, 'optics-cpo');
+    const a = asic(cx, ASIC_Z);
+    // 光引擎直接贴着 ASIC：6 组件 ×3 引擎（仿 Quantum-X800）
+    const engines = new THREE.Group();
+    const engM = new THREE.MeshStandardMaterial({ color: 0x06b6d4, emissive: 0x06b6d4, emissiveIntensity: 0.45, roughness: 0.4 });
+    const ring = [
+      [-0.62, -0.42], [-0.62, 0], [-0.62, 0.42],
+      [0.62, -0.42], [0.62, 0], [0.62, 0.42],
+      [-0.42, -0.62], [0, -0.62], [0.42, -0.62],
+      [-0.42, 0.62], [0, 0.62], [0.42, 0.62],
+    ];
+    ring.forEach(([dx, dz]) => {
+      const e = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.14, 0.26), engM.clone());
+      e.position.set(cx + dx, 0.15, ASIC_Z + dz);
+      engines.add(e);
+    });
+    levelGroup.add(engines);
+    makePickable(engines, 'opt-engine');
+    // 光纤束：从封装直接到前面板
+    const fibM = new THREE.MeshStandardMaterial({ color: 0x67e8f9, emissive: 0x67e8f9, emissiveIntensity: 0.35 });
+    for (let i = 0; i < 5; i++) {
+      levelGroup.add(pipe([cx - 0.5 + i * 0.25, 0.18, ASIC_Z + 0.7], [cx - 1.0 + i * 0.5, 0.18, faceZ], 0.012, fibM.clone()));
+    }
+    // 前面板：MPO 光纤口一排 + ELS 金色激光模块一排
+    const ports = new THREE.Group();
+    for (let i = 0; i < 8; i++) {
+      const p = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.1, 0.06), mat(M.ssd));
+      p.position.set(cx - 1.5 + i * 0.43, 0.42, faceZ + 0.06);
+      ports.add(p);
+    }
+    levelGroup.add(ports);
+    makePickable(ports, 'opt-mpo');
+    const elsG = new THREE.Group();
+    for (let i = 0; i < 4; i++) {
+      const els = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.12, 0.4), mat(M.chipGold));
+      els.position.set(cx - 1.0 + i * 0.65, 0.18, faceZ + 0.15);
+      elsG.add(els);
+    }
+    levelGroup.add(elsG);
+    makePickable(elsG, 'opt-els');
+    addLabel('④ CPO (共封装)', cx, 2.6, -1, 0.55);
+    addLabel('1.6T口 ~9W (-70%) · 2025H2 起出货', cx, 2.0, -1, 0.38);
+    addLabel('金色=ELS 外置激光', cx, 1.4, faceZ + 0.6, 0.3);
+  }
+
+  // 底部演进箭头
+  addLabel('—— 光电转换位置向 ASIC 前移 · 电链路 几十cm → 毫米 ——→', 0, 0.3, 2.6, 0.55);
 }
 
 // ============================================================
@@ -1092,6 +1299,7 @@ renderer.domElement.addEventListener('dblclick', e => {
   else if (id === 'compute-tray' && (currentRackType === 'gb200' || currentRackType === 'gb300' || currentRackType === 'rubin')) goto('tray');
   else if (id === 'nvswitch-tray') goto('switchTray');
   else if (id === 'network-rack') goto('cluster');
+  else if (id === 'cluster-optics') goto('optics');
 });
 
 // ---------- 渲染循环 ----------
