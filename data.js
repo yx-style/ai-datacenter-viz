@@ -234,7 +234,7 @@ export const COMPONENTS = {
   'compute-tray': {
     name: '计算托盘（Compute Tray）',
     cat: '机柜单元',
-    desc: '1U 高的"刀片"，全柜 18 个。每个装 2 块 Bianca 板（每板 1 Grace CPU + 2 Blackwell GPU），单托盘 TDP 6.3kW。托盘约 85% 热量走液冷（Bianca 板上盖冷板），前部 NIC/DPU/管理板仍是风冷（8 个风扇）。前面板：8 个 E1.S 存储位 + OSFP 笼 + 管理口。点击进入托盘内部。',
+    desc: '1U 高的"刀片"，全柜 18 个。每个装 2 块 Bianca 板（每板 1 Grace CPU + 2 Blackwell GPU），单托盘 TDP 6.3kW。托盘约 85% 热量走液冷（Bianca 板上盖冷板），前部 NIC/DPU/存储仍是风冷（8 个风扇）。前面板（DGX 口径）：4× E1.S 3.84TB NVMe + 4× ConnectX-7 400G OSFP + 2× BlueField-3 + 管理口（超微等 ODM 有 8 盘位配置）。点击进入托盘内部。',
     role: '算力的物理载体',
     shape: '1U 抽屉式金属托盘；内部两块 Bianca 板上盖液冷冷板，前部是存储位和网络接口',
     value: { perRackK: 2642, bGW: 15.7, pct: 38.7 }, vrK: 6035,
@@ -256,9 +256,9 @@ export const COMPONENTS = {
     action: 'enterSwitchTray',
   },
   'power-shelf': {
-    name: '电源架（Power Shelf）×4',
+    name: '电源架（Power Shelf）×8',
     cat: '机柜单元',
-    desc: 'NVL72 有 4 个电源架，顶部 2 个 + 底部 2 个对称布置。每个 = 6 颗 5.5kW PSU = 33kW，合计 132kW。输入 346-480V 交流（来自机房 power whip），输出 48/50V 直流给母排，单架最大 600A。机柜级集中整流比节点级 PSU 效率高约 2%。VR 时代电源价值量涨到 $150K（3 倍+），800V HVDC 在 2H26 启动——这是确定性最强的增量环节。',
+    desc: 'DGX GB200 机柜共 8 个电源架，顶部 4 个 + 底部 4 个对称布置，N+N 冗余。每个 = 6 颗 5.5kW 风冷 PSU = 33kW 输入，把 power whip 送来的交流转成 50-51V 直流送上母排，整柜实际功耗约 120kW。机柜级集中整流比节点级 PSU 效率高约 2%。VR 时代电源价值量涨到 $150K（3 倍+），800V HVDC 在 2H26 启动——这是确定性最强的增量环节。',
     role: 'AC→DC 整流与柜内供电',
     shape: '1U 金属盒，里面 6 个可热插拔电源模块',
     value: { perRackK: 44, bGW: 0.3, pct: 0.6 }, vrK: 150,

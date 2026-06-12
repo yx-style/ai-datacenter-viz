@@ -20,13 +20,16 @@ const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.05, 5
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
 wrap.appendChild(renderer.domElement);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 
-scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+scene.add(new THREE.HemisphereLight(0x33415c, 0x0a0c10, 0.55));
 const key = new THREE.DirectionalLight(0xffffff, 1.1);
 key.position.set(20, 40, 25);
 scene.add(key);
@@ -84,6 +87,46 @@ function setEmissive(obj, color, intensity) {
   });
 }
 
+// ---------- 流动脉冲系统：沿路径移动的发光小球，表达链路方向 ----------
+let flows = [];
+function addFlow(pts, color, count = 3, speed = 0.35, size = 0.1) {
+  const curve = new THREE.CatmullRomCurve3(pts.map(p => new THREE.Vector3(...p)), false, 'catmullrom', 0.01);
+  const m = new THREE.MeshBasicMaterial({ color });
+  const spheres = [];
+  for (let i = 0; i < count; i++) {
+    const s = new THREE.Mesh(new THREE.SphereGeometry(size, 8, 8), m);
+    levelGroup.add(s);
+    spheres.push(s);
+  }
+  flows.push({ curve, spheres, speed, offset: Math.random() });
+}
+
+// ---------- 相机平滑过渡 ----------
+let camTween = null;
+let firstPose = true;
+function setPose(pos, tgt) {
+  if (firstPose) {
+    camera.position.set(...pos);
+    controls.target.set(...tgt);
+    firstPose = false;
+    return;
+  }
+  camTween = {
+    t: 0,
+    fp: camera.position.clone(), ft: controls.target.clone(),
+    tp: new THREE.Vector3(...pos), tt: new THREE.Vector3(...tgt),
+  };
+}
+
+// ---------- 图例 ----------
+const legendEl = document.getElementById('legend');
+function setLegend(items) {
+  if (!items || !items.length) { legendEl.style.display = 'none'; return; }
+  legendEl.style.display = 'block';
+  legendEl.innerHTML = items.map(([c, t]) =>
+    `<div class="li"><span class="sw" style="background:${c}"></span>${t}</div>`).join('');
+}
+
 // ---------- 层级状态机 ----------
 // view: 'campus' | 'rack' | 'tray' | 'switchTray' | 'cluster'
 let view = 'campus';
@@ -117,8 +160,10 @@ function clearLevel() {
   scene.add(levelGroup);
   pickables = [];
   pulseSet.clear();
+  flows = [];
   hovered = null; selected = null;
   hidePanel();
+  setLegend(null);
 }
 
 function goto(v) {
@@ -316,9 +361,12 @@ function pipe(p1, p2, radius, material) {
 //       右侧=冷却链路（白区 CDU→冷机→冷却塔）
 // ============================================================
 function buildCampus() {
-  camera.position.set(0, 40, 64);
-  controls.target.set(-3, 0, 3);
+  setPose([0, 40, 64], [-3, 0, 3]);
   setCaption('数据中心全景 · GB200 口径 $40.5B/GW（VR $47.3B） · 前=电力链路（8 段）右=冷却链路 · 双击机房白区进入机柜层');
+  setLegend([
+    ['#2563eb', '计算机柜'], ['#9ca3af', '支持机柜'], ['#b8860b', '电力链路'],
+    ['#b91c1c', '热水（回）'], ['#2563eb', '冷水（供）'], ['#0e7490', 'CDU'],
+  ]);
 
   const ground = new THREE.Mesh(new THREE.BoxGeometry(100, 0.5, 70), mat(M.floor));
   ground.position.y = -0.25;
@@ -473,7 +521,7 @@ function buildCampus() {
   // 冷却塔（最右侧）
   const towers = new THREE.Group();
   for (let i = 0; i < 4; i++) {
-    const base = new THREE.Mesh(new THREE.BoxGeometry(3.4, 2.6, 3.4), mat(M.metal));
+    const base = new THREE.Mesh(new THREE.BoxGeometry(3.4, 2.6, 3.4), mat(M.grayBox));
     base.position.set(38, 1.3, -10 + i * 6.5);
     towers.add(base);
     const fan = new THREE.Mesh(new THREE.CylinderGeometry(1.35, 1.35, 0.5, 24), mat(M.darkMetal));
@@ -509,6 +557,18 @@ function buildCampus() {
   addLabel('储水', 32, 5.4, 13, 0.5);
   addLabel('→ 8 段电力链路 →', -21, 0.4, 23.5, 0.8);
   addLabel('→ 冷却链路 →', 26, 0.4, 7, 0.6);
+
+  // ---- 流动脉冲：电流（黄）与冷却水（红/蓝）----
+  addFlow([[-40, 0.7, 20], [-32, 0.7, 20], [-26, 0.7, 20], [-20, 0.7, 20],
+           [-14, 0.7, 20], [-7, 0.7, 20], [-1, 0.7, 20], [-4, 0.7, 15.3]],
+          0xfbbf24, 5, 0.07, 0.16);
+  addFlow([[-20, 0.7, 27], [-20, 0.7, 20.7]], 0xfbbf24, 1, 0.12, 0.12);
+  // 热水：白区→CDU→冷机→冷却塔（红）
+  addFlow([[12, 1.0, 0], [15, 1.0, -2], [23.5, 1.0, -3], [28.5, 1.0, -3], [36, 1.0, -5]],
+          0xef4444, 3, 0.09, 0.14);
+  // 冷水回流（蓝，反向）
+  addFlow([[36, 0.7, -5], [28.5, 0.7, -3], [23.5, 0.7, -3], [15.8, 0.7, -2], [12, 0.7, 0]],
+          0x3b82f6, 3, 0.09, 0.14);
 }
 
 // ============================================================
@@ -516,8 +576,7 @@ function buildCampus() {
 // ============================================================
 function buildRack(type) {
   renderSwitcher();
-  camera.position.set(4.2, 2.6, 5.2);
-  controls.target.set(0, 1.5, 0);
+  setPose([4.2, 2.6, 5.2], [0, 1.5, 0]);
 
   const ground = new THREE.Mesh(new THREE.BoxGeometry(14, 0.1, 12), mat(M.floor));
   ground.position.y = -0.05;
@@ -525,10 +584,17 @@ function buildRack(type) {
 
   if (type === 'gb200' || type === 'gb300') {
     buildNVL72Rack();
-    setCaption('NVL72 真实布局：顶 TOR + 电源架×2 · 上 10 计算托盘 · 中 9 NVSwitch（金）· 下 8 计算托盘 · 底电源架×2 · 双击托盘进入');
+    setCaption('NVL72 真实布局：顶 TOR×2 + 电源架 4 上 4 下（N+N）· 计算托盘 18 · NVSwitch 9 居中 · 抽出的托盘=可双击进入');
+    setLegend([
+      ['#3a424d', '计算托盘 ×18'], ['#d4a017', 'NVSwitch ×9'], ['#4b5563', '电源架 ×8'],
+      ['#166534', '管理 TOR'], ['#b87333', '母排/铜缆'], ['#2563eb', '液冷歧管'],
+    ]);
   } else if (type === 'rubin') {
     buildNVL72Rack();
     setCaption('Vera Rubin NVL72（借 NVL72 结构示意） · $9.1M/柜 220kW · 电源/液冷/铜缆价值量均 ~3 倍于 GB200');
+    setLegend([
+      ['#3a424d', '计算托盘'], ['#d4a017', 'NVSwitch'], ['#4b5563', '电源架'], ['#b87333', '母排/铜缆'],
+    ]);
   } else if (type === 'h100') {
     buildH100Rack();
     setCaption('H100 DGX×8（上代对照）：风冷 HGX 服务器堆叠，41kW/柜 $2.0M · 与 NVL72 的本质区别是风冷 vs 液冷');
@@ -547,18 +613,19 @@ function buildRack(type) {
 }
 
 // NVL72 机柜（按 NVIDIA DGX 文档/SemiAnalysis 布局）
-// 自上而下：TOR×1 → 电源架×2 → 计算×10 → NVSwitch×9 → 计算×8 → 电源架×2
+// 自上而下：TOR×2 → 电源架×4 → 计算×10 → NVSwitch×9 → 计算×8 → 电源架×4
+// 共 8 个电源架（N+N 冗余，每个 33kW=6×5.5kW PSU）
 function buildNVL72Rack() {
   const W = 1.2, D = 2.4;
   // 框架
   const frame = new THREE.Group();
   [[-W/2, -D/2], [W/2, -D/2], [-W/2, D/2], [W/2, D/2]].forEach(([x, z]) => {
-    const post = new THREE.Mesh(new THREE.BoxGeometry(0.08, 3.4, 0.08), mat(M.darkMetal));
-    post.position.set(x, 1.7, z);
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.08, 3.6, 0.08), mat(M.darkMetal));
+    post.position.set(x, 1.8, z);
     frame.add(post);
   });
   const top = new THREE.Mesh(new THREE.BoxGeometry(W, 0.07, D), mat(M.darkMetal));
-  top.position.y = 3.4;
+  top.position.y = 3.6;
   frame.add(top);
   const base = new THREE.Mesh(new THREE.BoxGeometry(W, 0.12, D), mat(M.darkMetal));
   base.position.y = 0.06;
@@ -566,21 +633,22 @@ function buildNVL72Rack() {
   levelGroup.add(frame);
   makePickable(frame, 'rack-frame');
 
-  const trayH = 0.082, gap = 0.012;
-  let y = 0.18;
+  const trayH = 0.078, gap = 0.011;
+  let y = 0.16;
   // 布局序列（从下往上画）
   const slots = [];
-  for (let i = 0; i < 2; i++) slots.push('power');
+  for (let i = 0; i < 4; i++) slots.push('power');
   for (let i = 0; i < 8; i++) slots.push('compute');
   for (let i = 0; i < 9; i++) slots.push('switch');
   for (let i = 0; i < 10; i++) slots.push('compute');
-  for (let i = 0; i < 2; i++) slots.push('power');
-  slots.push('tor');
+  for (let i = 0; i < 4; i++) slots.push('power');
+  slots.push('tor'); slots.push('tor');
 
   const computeGroup = new THREE.Group();
   const switchGroup = new THREE.Group();
   const powerGroup = new THREE.Group();
   const torGroup = new THREE.Group();
+  let computeIdx = 0, switchIdx = 0;
 
   slots.forEach(kind => {
     let m, g;
@@ -588,34 +656,87 @@ function buildNVL72Rack() {
     else if (kind === 'switch') { m = mat(M.chipGold); g = switchGroup; }
     else if (kind === 'tor') { m = mat(M.green); g = torGroup; }
     else { m = mat(M.grayBox); g = powerGroup; }
+
+    // “主角托盘”：最上面一个计算托盘和中间一个交换托盘向前抽出，体现拆解感
+    let zOff = 0;
+    if (kind === 'compute') { computeIdx++; if (computeIdx === 18) zOff = 0.42; }
+    if (kind === 'switch') { switchIdx++; if (switchIdx === 5) zOff = 0.3; }
+
     const tray = new THREE.Mesh(new THREE.BoxGeometry(W - 0.18, trayH, D - 0.3), m);
-    tray.position.set(0, y + trayH / 2, 0);
+    tray.position.set(0, y + trayH / 2, zOff);
     g.add(tray);
-    const face = new THREE.Mesh(new THREE.BoxGeometry(W - 0.24, trayH * 0.6, 0.02), mat(M.chipDark));
-    face.position.set(0, y + trayH / 2, (D - 0.3) / 2 + 0.012);
-    g.add(face);
+    // 前面板微细节
+    const faceZ = (D - 0.3) / 2 + zOff + 0.012;
+    if (kind === 'compute') {
+      // 左侧 4 个 E1.S 盘位（青色竖条）
+      for (let i = 0; i < 4; i++) {
+        const ssd = new THREE.Mesh(new THREE.BoxGeometry(0.035, trayH * 0.62, 0.015), mat(M.ssd));
+        ssd.position.set(-0.41 + i * 0.06, y + trayH / 2, faceZ);
+        g.add(ssd);
+      }
+      // 中部 4 个 OSFP 笼（深色块）
+      for (let i = 0; i < 4; i++) {
+        const cage = new THREE.Mesh(new THREE.BoxGeometry(0.07, trayH * 0.5, 0.012), mat(M.chipDark));
+        cage.position.set(-0.08 + i * 0.1, y + trayH / 2, faceZ);
+        g.add(cage);
+      }
+      // 右侧指示灯
+      const led = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.02, 0.012),
+        new THREE.MeshStandardMaterial({ color: 0x4ade80, emissive: 0x4ade80, emissiveIntensity: 0.8 }));
+      led.position.set(0.44, y + trayH / 2, faceZ);
+      g.add(led);
+    } else if (kind === 'switch') {
+      // 交换托盘前面板：两个把手 + 指示灯（NVL72 柜内交换无光口）
+      [-0.35, 0.35].forEach(x => {
+        const handle = new THREE.Mesh(new THREE.BoxGeometry(0.1, trayH * 0.4, 0.015), mat(M.darkMetal));
+        handle.position.set(x, y + trayH / 2, faceZ);
+        g.add(handle);
+      });
+      const led = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.02, 0.012),
+        new THREE.MeshStandardMaterial({ color: 0xfbbf24, emissive: 0xfbbf24, emissiveIntensity: 0.8 }));
+      led.position.set(0.44, y + trayH / 2, faceZ);
+      g.add(led);
+    } else if (kind === 'power') {
+      // 电源架：6 个 PSU 分隔
+      for (let i = 0; i < 6; i++) {
+        const psu = new THREE.Mesh(new THREE.BoxGeometry(0.135, trayH * 0.62, 0.012), mat(M.metal));
+        psu.position.set(-0.39 + i * 0.156, y + trayH / 2, faceZ);
+        g.add(psu);
+      }
+    } else {
+      // TOR：一排小端口
+      for (let i = 0; i < 10; i++) {
+        const port = new THREE.Mesh(new THREE.BoxGeometry(0.045, trayH * 0.4, 0.012), mat(M.chipDark));
+        port.position.set(-0.38 + i * 0.085, y + trayH / 2, faceZ);
+        g.add(port);
+      }
+    }
     y += trayH + gap;
   });
   levelGroup.add(computeGroup, switchGroup, powerGroup, torGroup);
-  makePickable(computeGroup, 'compute-tray', true);
-  makePickable(switchGroup, 'nvswitch-tray', true);
+  makePickable(computeGroup, 'compute-tray');
+  makePickable(switchGroup, 'nvswitch-tray');
   makePickable(powerGroup, 'power-shelf');
   makePickable(torGroup, 'tor-switch');
 
+  // 抽出托盘的指示标签
+  addLabel('计算托盘（抽出示意，双击进入）→', 1.85, 3.02, 0.6, 0.26);
+  addLabel('NVSwitch 托盘 →', 1.4, 1.55, 0.5, 0.26);
+
   // 直流母排：后部中央垂直铜排
   const busbar = new THREE.Group();
-  const bar = new THREE.Mesh(new THREE.BoxGeometry(0.12, 3.1, 0.05), mat(M.copper));
-  bar.position.set(0, 1.65, -D/2 + 0.10);
+  const bar = new THREE.Mesh(new THREE.BoxGeometry(0.12, 3.3, 0.05), mat(M.copper));
+  bar.position.set(0, 1.8, -D/2 + 0.10);
   busbar.add(bar);
   levelGroup.add(busbar);
   makePickable(busbar, 'busbar');
 
   // 液冷歧管：后部两侧垂直管
   const manifold = new THREE.Group();
-  const blue = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 3.1), mat(M.blue));
-  blue.position.set(-W/2 + 0.13, 1.65, -D/2 + 0.08);
-  const red = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 3.1), mat(M.red));
-  red.position.set(W/2 - 0.13, 1.65, -D/2 + 0.08);
+  const blue = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 3.3), mat(M.blue));
+  blue.position.set(-W/2 + 0.13, 1.8, -D/2 + 0.08);
+  const red = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 3.3), mat(M.red));
+  red.position.set(W/2 - 0.13, 1.8, -D/2 + 0.08);
   manifold.add(blue, red);
   levelGroup.add(manifold);
   makePickable(manifold, 'manifold');
@@ -741,8 +862,11 @@ function buildCPURack() {
 // NIC mezz + DPU + 风扇排 + 后部 PDB/母排连接器/背板连接器
 // ============================================================
 function buildTray() {
-  camera.position.set(0.9, 1.5, 1.9);
-  controls.target.set(0, 0.25, 0);
+  setPose([1.15, 1.75, 2.3], [0, 0.2, 0]);
+  setLegend([
+    ['#d4a017', 'GPU die'], ['#7c3aed', 'HBM'], ['#1f2937', 'CPU/DPU'], ['#166534', 'NIC/内存'],
+    ['#0e7490', 'E1.S 存储'], ['#b87333', '冷板/连接器'],
+  ]);
   setCaption('GB200 计算托盘 ×18/柜 · 2 块 Bianca 板（各 1 Grace + 2 B200）· 6.3kW/托盘 · 后段液冷 85% + 前段风冷 15%');
 
   const ground = new THREE.Mesh(new THREE.BoxGeometry(6, 0.05, 5), mat(M.floor));
@@ -903,62 +1027,125 @@ function buildTray() {
   levelGroup.add(bpcG);
   makePickable(bpcG, 'backplane-connector');
 
-  addLabel('后：Bianca×2 (液冷)', 0, 0.85, -0.9, 0.3);
-  addLabel('前：NIC/DPU/E1.S (风冷)', 0, 0.75, 0.85, 0.3);
+  // 引线标注：细线 + 小标签，指向关键部件
+  const leadM = new THREE.MeshBasicMaterial({ color: 0x8b949e });
+  function leader(text, x, y, z, h, s = 0.085) {
+    levelGroup.add(pipe([x, y, z], [x, y + h - 0.05, z], 0.003, leadM));
+    addLabel(text, x, y + h, z, s);
+  }
+  leader('B200 GPU ×4', -0.82, 0.16, -0.18, 0.42);
+  leader('HBM', -0.42, 0.17, -0.32, 0.25);
+  leader('Grace CPU ×2', 0.62, 0.15, -0.7, 0.5);
+  leader('冷板（液冷）', 0.95, 0.24, -0.25, 0.32);
+  leader('风扇 ×8', -1.0, 0.16, 0.18, 0.34, 0.075);
+  leader('ConnectX-7 ×4', -0.7, 0.13, 0.45, 0.5, 0.07);
+  leader('BlueField-3 ×2', 0.3, 0.14, 0.45, 0.3, 0.07);
+  leader('E1.S 盘位', -1.0, 0.18, 0.78, 0.62, 0.065)
+  leader('OSFP 笼', 0.7, 0.16, 0.97, 0.36, 0.06);
+  leader('母排取电', 0, 0.17, -0.92, 0.26);
+  addLabel('后：Bianca×2 (液冷 85%)', -1.55, 0.32, -0.9, 0.1);
+  addLabel('前：网络/存储 (风冷 15%)', -1.35, 0.5, 1.1, 0.07);
 }
 
 // ============================================================
 // 第 3b 层：NVSwitch 托盘内部
 // ============================================================
 function buildSwitchTray() {
-  camera.position.set(0.8, 1.4, 1.8);
-  controls.target.set(0, 0.2, 0);
-  setCaption('NVSwitch 托盘 ×9/柜 · 每托盘 2 颗 28.8Tb/s NVSwitch5 · NVL72 柜内交换不需要光模块');
+  setPose([0.9, 1.5, 2.0], [0, 0.2, 0]);
+  setCaption('NVSwitch 托盘 ×9/柜 · 每托盘 2 颗 28.8Tb/s NVSwitch5 · NVL72 柜内交换不需要光模块，前面板只有管理口');
+  setLegend([
+    ['#d4a017', 'NVSwitch5 芯片'], ['#b87333', '冷板/背板连接器'], ['#14532d', 'PCB'], ['#1f2937', 'VRM/被动件'],
+  ]);
 
   const ground = new THREE.Mesh(new THREE.BoxGeometry(6, 0.05, 5), mat(M.floor));
   ground.position.y = -0.03;
   levelGroup.add(ground);
 
-  const chassis = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.06, 1.8), mat(M.darkMetal));
+  const chassis = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.06, 1.9), mat(M.darkMetal));
   chassis.position.y = 0.03;
   levelGroup.add(chassis);
   makePickable(chassis, 'rack-frame');
 
-  const board = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.04, 1.6), mat(M.pcb));
-  board.position.y = 0.08;
+  const board = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.04, 1.5), mat(M.pcb));
+  board.position.set(0, 0.08, -0.1);
   levelGroup.add(board);
   makePickable(board, 'pcb');
 
   [-0.5, 0.5].forEach(x => {
     const chipG = new THREE.Group();
-    const chip = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.06, 0.4), mat(M.chipGold));
-    chip.position.set(x, 0.14, 0);
+    const sub = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.03, 0.5), mat(M.chipDark));
+    sub.position.set(x, 0.115, -0.1);
+    chipG.add(sub);
+    const chip = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.06, 0.38), mat(M.chipGold));
+    chip.position.set(x, 0.16, -0.1);
     chipG.add(chip);
     const plate = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.04, 0.5),
       new THREE.MeshStandardMaterial({ color: 0xb87333, transparent: true, opacity: 0.35, metalness: 0.7 }));
-    plate.position.set(x, 0.2, 0);
+    plate.position.set(x, 0.22, -0.1);
     chipG.add(plate);
     levelGroup.add(chipG);
     makePickable(chipG, 'nvswitch-chip');
+
+    // 芯片两侧 VRM 条 + MLCC 点
+    const vrmG = new THREE.Group();
+    [-0.38, 0.38].forEach(dx => {
+      for (let i = 0; i < 4; i++) {
+        const v = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.04, 0.1), mat(M.chipDark));
+        v.position.set(x + dx, 0.12, -0.32 + i * 0.15);
+        vrmG.add(v);
+      }
+    });
+    levelGroup.add(vrmG);
+    makePickable(vrmG, 'mlcc');
   });
 
-  // 后缘 4 个 144DP 背板连接器
+  // 后缘 4 个 144DP 背板连接器（贴着托盘后缘）
   const bpcG = new THREE.Group();
   [-0.8, -0.3, 0.3, 0.8].forEach(x => {
-    const c = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.12, 0.1), mat(M.copper));
-    c.position.set(x, 0.13, -0.82);
+    const c = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.12, 0.12), mat(M.copper));
+    c.position.set(x, 0.12, -0.86);
     bpcG.add(c);
   });
   levelGroup.add(bpcG);
   makePickable(bpcG, 'backplane-connector');
+
+  // 前面板：把手 + 管理口 RJ45
+  const faceG = new THREE.Group();
+  const faceplate = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.16, 0.04), mat(M.darkMetal));
+  faceplate.position.set(0, 0.12, 0.87);
+  faceG.add(faceplate);
+  [-1.0, 1.0].forEach(x => {
+    const handle = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.1, 0.05), mat(M.metal));
+    handle.position.set(x, 0.12, 0.9);
+    faceG.add(handle);
+  });
+  const rj = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.07, 0.04), mat(M.chipDark));
+  rj.position.set(0, 0.12, 0.9);
+  faceG.add(rj);
+  levelGroup.add(faceG);
+  makePickable(faceG, 'rack-frame');
+
+  // 引线标注
+  const leadM = new THREE.MeshBasicMaterial({ color: 0x8b949e });
+  function leader(text, x, y, z, h, s = 0.085) {
+    levelGroup.add(pipe([x, y, z], [x, y + h - 0.05, z], 0.003, leadM));
+    addLabel(text, x, y + h, z, s);
+  }
+  leader('NVSwitch5 ×2（各 72 个 NVLink 口）', -0.5, 0.24, -0.1, 0.5);
+  leader('冷板（液冷）', 0.5, 0.24, -0.1, 0.32);
+  leader('背板连接器 4×144 差分对', -0.3, 0.18, -0.86, 0.6);
+  leader('VRM/被动件', 0.88, 0.14, -0.2, 0.28, 0.07);
+  leader('管理口（无光模块）', 0, 0.16, 0.9, 0.34, 0.065);
 }
 
 // ============================================================
 // 第 4 层：集群网络（8 柜 = 1 个 SuperPOD scalable unit）
 // ============================================================
 function buildCluster() {
-  camera.position.set(10, 8, 14);
-  controls.target.set(0, 2, 0);
+  setPose([10, 8, 14], [0, 2, 0]);
+  setLegend([
+    ['#2563eb', 'NVL72 机柜（柜内铜缆）'], ['#3a424d', 'Leaf 交换机'], ['#4b5563', 'Spine'], ['#d4a017', '光纤/光模块'],
+  ]);
   setCaption('集群网络：8× NVL72 = 1 个 DGX SuperPOD 可扩展单元 · 柜内=NVLink 铜缆（蓝光柜体）· 柜间=光纤上行到 leaf/spine');
 
   const ground = new THREE.Mesh(new THREE.BoxGeometry(30, 0.1, 20), mat(M.floor));
@@ -1021,6 +1208,12 @@ function buildCluster() {
   levelGroup.add(fiberG);
   makePickable(fiberG, 'cluster-optics', true);
 
+  // 数据流脉冲：机柜→leaf→spine
+  [[rackXs[1], leafXs[0]], [rackXs[4], leafXs[2]], [rackXs[6], leafXs[3]]].forEach(([rx, lx]) => {
+    addFlow([[rx, 3.4, 2.0], [lx, 4.6, -1.2], [lx, 5.05, -1.6], [(lx > 0 ? 3 : -3), 6.8, -4.2]],
+            0xfbbf24, 2, 0.18, 0.08);
+  });
+
   addLabel('8× NVL72（每柜内部 = NVLink 域，纯铜缆）', 0, 0.4, 4.6, 0.55);
   addLabel('Leaf 交换机', -8.6, 4.8, -1.5, 0.45);
   addLabel('Spine', -6, 7.0, -4.5, 0.45);
@@ -1033,8 +1226,11 @@ function buildCluster() {
 // 电链路 几十cm → 数cm → 毫米，1.6T 端口 30W → 9W
 // ============================================================
 function buildOptics() {
-  camera.position.set(0, 11.5, 13);
-  controls.target.set(0, 0, -1.2);
+  setPose([0, 11.5, 13], [0, 0, -1.2]);
+  setLegend([
+    ['#d4a017', '交换 ASIC / DSP / ELS'], ['#06b6d4', '硅光引擎'], ['#16a34a', 'Driver/TIA'],
+    ['#b91c1c', '长电链路（高损耗）'], ['#67e8f9', '光纤'],
+  ]);
   setCaption('光互联四条路线 · 看光引擎（青色）的位置：前面板 → 前面板(无DSP) → ASIC 旁 → ASIC 上 · 1.6T 端口功耗 30W → 9W');
 
   const ground = new THREE.Mesh(new THREE.BoxGeometry(26, 0.1, 16), mat(M.floor));
@@ -1112,6 +1308,8 @@ function buildOptics() {
     levelGroup.add(mods, dsps);
     makePickable(mods, 'optics-pluggable');
     makePickable(dsps, 'opt-dsp');
+    // 电信号脉冲：长链路，慢且红（损耗大）
+    addFlow([[cx, 0.14, ASIC_Z + 0.5], [cx, 0.12, faceZ - 0.2]], 0xef4444, 2, 0.25, 0.07);
     addLabel('① 可插拔 (DSP)', cx, 2.6, -1, 0.55);
     addLabel('1.6T口 ~30W · 现在的主力', cx, 2.0, -1, 0.38);
     addLabel('金块=DSP', cx + 1.6, 1.0, faceZ + 0.3, 0.28);
@@ -1137,6 +1335,7 @@ function buildOptics() {
     }
     levelGroup.add(mods);
     makePickable(mods, 'optics-lpo');
+    addFlow([[cx, 0.14, ASIC_Z + 0.5], [cx, 0.12, faceZ - 0.2]], 0xf59e0b, 2, 0.35, 0.06);
     addLabel('② LPO (去 DSP)', cx, 2.6, -1, 0.55);
     addLabel('-30~50% 功耗 · 保住可插拔', cx, 2.0, -1, 0.38);
     addLabel('绿点=Driver/TIA', cx + 1.6, 1.0, faceZ + 0.3, 0.28);
@@ -1176,6 +1375,8 @@ function buildOptics() {
     }
     levelGroup.add(ports);
     makePickable(ports, 'opt-mpo');
+    // 光信号脉冲（青色，快）：引擎→前面板
+    addFlow([[cx - 1.0, 0.18, ASIC_Z + 0.2], [cx - 0.5, 0.18, faceZ]], 0x67e8f9, 2, 0.5, 0.05);
     addLabel('③ NPO (近封装)', cx, 2.6, -1, 0.55);
     addLabel('光引擎搬进机箱 · 过渡方案', cx, 2.0, -1, 0.38);
   }
@@ -1222,6 +1423,8 @@ function buildOptics() {
     }
     levelGroup.add(elsG);
     makePickable(elsG, 'opt-els');
+    // 光信号脉冲：封装直出前面板（最快最轻）
+    addFlow([[cx, 0.2, ASIC_Z + 0.7], [cx, 0.18, faceZ]], 0x67e8f9, 3, 0.65, 0.05);
     addLabel('④ CPO (共封装)', cx, 2.6, -1, 0.55);
     addLabel('1.6T口 ~9W (-70%) · 2025H2 起出货', cx, 2.0, -1, 0.38);
     addLabel('金色=ELS 外置激光', cx, 1.4, faceZ + 0.6, 0.3);
@@ -1306,8 +1509,25 @@ renderer.domElement.addEventListener('dblclick', e => {
 const clock = new THREE.Clock();
 function animate() {
   requestAnimationFrame(animate);
-  controls.update();
+  const dt = clock.getDelta();
   const t = clock.getElapsedTime();
+  // 相机过渡（缓出）
+  if (camTween) {
+    camTween.t += dt / 1.0;
+    const k = camTween.t >= 1 ? 1 : 1 - Math.pow(1 - camTween.t, 3);
+    camera.position.lerpVectors(camTween.fp, camTween.tp, k);
+    controls.target.lerpVectors(camTween.ft, camTween.tt, k);
+    if (camTween.t >= 1) camTween = null;
+  }
+  controls.update();
+  // 链路脉冲
+  for (const f of flows) {
+    f.spheres.forEach((s, i) => {
+      const u = ((t * f.speed) + i / f.spheres.length + f.offset) % 1;
+      s.position.copy(f.curve.getPoint(u));
+    });
+  }
+  // 可进入对象呼吸发光
   const glow = 0.12 + Math.sin(t * 2.2) * 0.08;
   pulseSet.forEach(o => {
     if (o !== hovered && o !== selected) setEmissive(o, 0x2563eb, glow);
