@@ -18,8 +18,27 @@
 // ============================================================
 
 export const META = {
-  source: 'Bernstein 2026-06-08 (VR/GB200/H100 三代对照) + SemiAnalysis 物理规格',
-  asOf: '2026-06-08',
+  source: 'Bernstein 2026-06-08 (VR/GB200/H100 三代对照) + SemiAnalysis 物理规格 + Jefferies 2026-06-05 供给瓶颈',
+  asOf: '2026-06-12',
+};
+
+// ------------------------------------------------------------
+// 供给瓶颈（Jefferies 2026-06-05《All the Data Center Demand in
+// the World, Still Not Enough Supply》）：2025 年北美需求 21.1GW vs
+// 实际点亮 8.9GW，缺口 ~12GW。2026E 各环节隐含产能上限（GW）：
+// ------------------------------------------------------------
+export const SUPPLY_BOTTLENECKS = {
+  demandGW: 21.1,
+  litGW: 8.9,
+  hyperscalerCapex26E: 770, // $B
+  ceilings: [
+    { name: 'EPC/建筑劳动力', gw: 10.4, note: '2026E 最紧的约束。主要 EPC 合计 ~26.4 万人，年增仅 ~5%；持证电工无法自动化或外包', players: 'Quanta、MasTec、Primoris、EMCOR 等' },
+    { name: '冷却系统', gw: 13.1, note: 'AI 热密度逼着从风冷转向液冷/混合，资本密集且采购周期长', players: 'Vertiv、JCI、Stulz 等' },
+    { name: '电气设备', gw: 17.0, note: 'AI 数据中心每 MW 需要的电气设备远多于传统（密度+冗余）', players: '伊顿、施耐德、ABB、西门子' },
+    { name: '电力变压器', gw: 20.2, note: '没有变压器就无法通电——无替代、无变通、无法分期', players: 'ABB、西门子能源、日立能源等' },
+    { name: '电网电力供应', gw: 21.8, note: '没有并网或现场发电，建好了也开不了机', players: '电网公司/燃气轮机 OEM' },
+    { name: '备用柴发', gw: 24.1, note: '模型里最不紧的环节', players: 'CAT、康明斯、ABB、Generac、三菱电机' },
+  ],
 };
 
 // 三代机柜对照表（Bernstein Exhibit 5/6）
@@ -71,7 +90,7 @@ export const CAMPUS_ZONES = [
     id: 'backup-power',
     name: '备用电源（UPS + BBU + 柴发）',
     perRackK: 272, bGW: 1.6, pct: 4.0, conf: 'A',
-    desc: '三段式备份：UPS 应对毫秒级断电（响应 <10ms），柴发应对长时段（启动需 60s，满载续航 24-48 小时），BBU 走机柜内部路线绕过中央 UPS。AI 时代的结构性变化是 BBU 渗透——锂电池放进机柜本身就是 in-rack UPS，电池容量减半，效率更高，是 Rubin 时代电源价值量上修 3 倍的核心驱动之一（代价：机柜内消防方案要重做）。冗余口径：UPS/PDU 通常做 2N（A/B 双路），变压器/柴发做 N+1，对应 Tier 3 标准。',
+    desc: '三段式备份：UPS 应对毫秒级断电（响应 <10ms），柴发应对长时段（启动需 60s，满载续航 24-48 小时），BBU 走机柜内部路线绕过中央 UPS。冗余口径：UPS/PDU 通常做 2N（A/B 双路），变压器/柴发做 N+1，对应 Tier 3。注意两个研究源在 BBU 上的分歧：Bernstein 认为 BBU/超级电容是 Rubin 时代电源价值量上修 3 倍的核心驱动；SemiAnalysis（2024-10）则判断机柜功率密度飙升会让中央 UPS 在超大规模机房回潮、in-rack BBU 受挤压（锂电池进机柜的消防代价大）。两条路线哪个赢还没定论，跟踪 Delta/Vertiv 订单结构可以验证。',
     role: '断电时电力的多级冗余',
     players: ['伊顿', '施耐德', 'Vertiv', '台达', '柴发：卡特彼勒/康明斯/Rolls-Royce MTU'],
     children: [
@@ -85,7 +104,7 @@ export const CAMPUS_ZONES = [
     perRackK: 365, bGW: 2.2, pct: 5.4, conf: 'A',
     desc: '长时间停电的冗余电源，经 ATS（自动切换开关）接入配电链路，通常是一排集装箱式机组。注意：电网级燃气轮机（GE Vernova、西门子能源、三菱重工，合计全球产能 70-80%）不在数据中心 capex 口径内，但是当前最大的产业瓶颈。',
     role: '长时间断电的兜底冗余',
-    players: ['卡特彼勒', '康明斯', '劳斯莱斯 MTU', '科勒', 'Generac'],
+    players: ['卡特彼勒', '康明斯', 'ABB', 'Generac', '三菱电机', '劳斯莱斯 MTU(C)', '科勒(C)'],
   },
   {
     id: 'thermal',
@@ -117,9 +136,17 @@ export const CAMPUS_ZONES = [
     id: 'land',
     name: '土地与建筑',
     perRackK: 636, bGW: 3.8, pct: 9.4, conf: 'A',
-    desc: '地皮和厂房本身。折旧周期最长（10-25 年），从真实经济成本（TCO）看权重比现金 capex 显示的更低——IT 硬件按 6 年折旧，一个 GW 的年折旧约 $7.9B（VR 口径），是主导性的运营成本。',
+    desc: '地皮和厂房本身。折旧周期最长（10-25 年），从真实经济成本（TCO）看权重比现金 capex 显示的更低——IT 硬件按 6 年折旧，一个 GW 的年折旧约 $7.9B（VR 口径），是主导性的运营成本。地理差异巨大（SemiAnalysis 口径，不含 IT 设备）：美国 colocation 基准 ~$8M/MW，东京/新加坡这类土地受限市场 >$10M/MW（要建多层），马来西亚柔佛 ~$6M/MW；小型 retail 数据中心可达 2-3 倍。',
     role: '物理载体',
     players: ['开发商/REITs：Equinix、Digital Realty、万国数据(C)'],
+  },
+  {
+    id: 'bottleneck',
+    name: '⚠ 供给瓶颈：建不出来的部分',
+    perRackK: null, bGW: null, pct: null, conf: 'A',
+    desc: 'Jefferies 量化了"为什么数据中心不够"：2025 年北美需求 21.1GW，实际点亮只有 8.9GW，缺口约 12GW。2026E 各环节隐含产能上限（越小越卡脖子）：EPC/建筑劳动力 10.4GW（最紧——持证电工没法自动化也没法外包）＜ 冷却系统 13.1GW ＜ 电气设备 17.0GW ＜ 电力变压器 20.2GW ＜ 电网供电 21.8GW ＜ 备用柴发 24.1GW。超大规模 2026E capex $770B 在路上，瓶颈不是需求是供给——这是整个板块"涨价逻辑"的宏观底座。',
+    role: '供需缺口的量化视角',
+    players: ['EPC：Quanta、MasTec、EMCOR(C)', '其余见各环节'],
   },
 ];
 
@@ -515,7 +542,7 @@ export const COMPONENTS = {
     shape: '建筑内的箱式变压器，比 HV 变压器小但仍有人高',
     value: { perRackK: null, bGW: null, pct: null },
     valueNote: '计入"变压器"$306K/柜（HV+MV 合并）',
-    players: ['伊顿', '施耐德', 'ABB', '日立能源(C)', '金盘科技(C)'],
+    players: ['施耐德', '伊顿', 'ABB', '西门子', 'Legrand', '金盘科技(C)'],
     conf: 'B',
   },
   'ats': {
@@ -591,8 +618,8 @@ export const COMPONENTS = {
     role: '机柜内的最末端配电',
     shape: '机柜后部两根竖直长条，密布 C13/C19/Anderson 插孔',
     value: { perRackK: null, bGW: null, pct: null },
-    valueNote: '计入"PDU/ATS/STS等"项',
-    players: ['Vertiv', 'Legrand', 'Raritan(C)', 'Server Technology(C)'],
+    valueNote: '计入"PDU/ATS/STS等"项；超大规模偏好台达/光宝等台系定制（低毛利大批量，类似 ODM vs OEM）',
+    players: ['施耐德', 'Legrand', 'Vertiv', '光宝', '伊顿', '台达'],
     conf: 'B',
   },
 

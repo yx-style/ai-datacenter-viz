@@ -8,7 +8,7 @@
 // ============================================================
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { META, ARCH_COMPARE, CAMPUS_ZONES, RACK_TYPES, RACK_BOM, COMPONENTS } from './data.js';
+import { META, ARCH_COMPARE, CAMPUS_ZONES, RACK_TYPES, RACK_BOM, COMPONENTS, SUPPLY_BOTTLENECKS } from './data.js';
 
 // ---------- 基础场景 ----------
 const wrap = document.getElementById('canvas-wrap');
@@ -266,11 +266,18 @@ function panelForZone(id) {
   const z = CAMPUS_ZONES.find(z => z.id === id);
   if (!z) return;
   let html = `<div class="cat">数据中心 · 园区层</div><h2>${z.name}</h2>`;
-  html += `<div class="value-box">
-    <div class="v"><b>${fmtK(z.perRackK)}</b><span>折合每机柜</span></div>
-    <div class="v"><b>$${z.bGW}B</b><span>每 GW</span></div>
-    <div class="v"><b>${z.pct}%</b><span>占 DC capex</span></div>
-  </div>`;
+  if (z.perRackK != null) {
+    html += `<div class="value-box">
+      <div class="v"><b>${fmtK(z.perRackK)}</b><span>折合每机柜</span></div>
+      <div class="v"><b>$${z.bGW}B</b><span>每 GW</span></div>
+      <div class="v"><b>${z.pct}%</b><span>占 DC capex</span></div>
+    </div>`;
+  }
+  if (id === 'bottleneck') {
+    html += `<div class="sec">2026E 各环节产能上限（GW，需求 21.1）</div><table>` +
+      SUPPLY_BOTTLENECKS.ceilings.map(c =>
+        `<tr><td>${c.name}</td><td>${c.gw}</td></tr>`).join('') + `</table>`;
+  }
   html += `<div class="sec">是什么 / 干什么</div><p>${z.desc}</p>`;
   html += `<div class="sec">角色</div><p>${z.role}</p>`;
   if (z.children) {
@@ -322,17 +329,24 @@ function highlightById(id) {
 window.__enter = (v) => goto(v);
 
 // ---------- 3D 文字标签 ----------
-function addLabel(text, x, y, z, scale = 1) {
+function addLabel(text, x, y, z, scale = 1, opts = {}) {
   const fontSize = 56;
-  const pad = 24;
+  const pad = 30;
   const cv = document.createElement('canvas');
   const ctx = cv.getContext('2d');
   ctx.font = `${fontSize}px -apple-system, PingFang SC, sans-serif`;
   const textW = Math.ceil(ctx.measureText(text).width);
   cv.width = textW + pad * 2;
   cv.height = fontSize + pad;
+  // 半透明圆角底板：复杂背景上保持可读
+  if (opts.bg !== false) {
+    ctx.fillStyle = 'rgba(13,17,23,.6)';
+    ctx.beginPath();
+    ctx.roundRect(2, 2, cv.width - 4, cv.height - 4, 18);
+    ctx.fill();
+  }
   ctx.font = `${fontSize}px -apple-system, PingFang SC, sans-serif`;
-  ctx.fillStyle = 'rgba(230,237,243,.95)';
+  ctx.fillStyle = opts.color || 'rgba(230,237,243,.95)';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(text, cv.width / 2, cv.height / 2);
@@ -343,6 +357,19 @@ function addLabel(text, x, y, z, scale = 1) {
   sp.scale.set(worldH * cv.width / cv.height, worldH, 1);
   sp.position.set(x, y, z);
   levelGroup.add(sp);
+}
+
+// 人形比例尺（1.75m），unitsPerMeter = 场景中 1 米的世界单位长度
+function addHuman(x, z, unitsPerMeter) {
+  const h = 1.75 * unitsPerMeter;
+  const bodyM = new THREE.MeshStandardMaterial({ color: 0x6e7681, roughness: 0.85 });
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(h * 0.045, h * 0.56, 4, 10), bodyM);
+  body.position.set(x, h * 0.40, z);
+  levelGroup.add(body);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(h * 0.052, 12, 12), bodyM.clone());
+  head.position.set(x, h * 0.83, z);
+  levelGroup.add(head);
+  addLabel('1.75m', x, h * 1.0, z, 0.1 * unitsPerMeter);
 }
 
 // 管道辅助：两点间圆柱
@@ -558,6 +585,38 @@ function buildCampus() {
   addLabel('→ 8 段电力链路 →', -21, 0.4, 23.5, 0.8);
   addLabel('→ 冷却链路 →', 26, 0.4, 7, 0.6);
 
+  // ---- 供给瓶颈条形图（园区右前角）：各环节 2026E 产能上限 vs 需求 21.1GW ----
+  const btG = new THREE.Group();
+  const btX0 = 24, btZ = 24;
+  const demandH = 21.1 * 0.32;
+  SUPPLY_BOTTLENECKS.ceilings.forEach((c, i) => {
+    const h = c.gw * 0.32;
+    const tight = c.gw < 15; // 越紧越红
+    const bar = new THREE.Mesh(
+      new THREE.BoxGeometry(1.6, h, 1.6),
+      new THREE.MeshStandardMaterial({
+        color: tight ? 0xb91c1c : (c.gw < 21.1 ? 0xd97706 : 0x16a34a),
+        emissive: tight ? 0xb91c1c : 0x000000, emissiveIntensity: tight ? 0.25 : 0,
+        roughness: 0.6,
+      })
+    );
+    bar.position.set(btX0 + i * 2.6, h / 2 + 0.05, btZ);
+    btG.add(bar);
+    addLabel(c.gw + '', btX0 + i * 2.6, h + 0.7, btZ, 0.42);
+    addLabel(c.name.replace('/建筑劳动力', '劳动力').replace('电网电力供应', '电网供电'), btX0 + i * 2.6, -0.05, btZ + 1.6, 0.34);
+  });
+  // 需求线：一根横穿的细红杆
+  const demandLine = new THREE.Mesh(
+    new THREE.BoxGeometry(SUPPLY_BOTTLENECKS.ceilings.length * 2.6 + 1, 0.06, 0.06),
+    new THREE.MeshStandardMaterial({ color: 0xef4444, emissive: 0xef4444, emissiveIntensity: 0.6 })
+  );
+  demandLine.position.set(btX0 + (SUPPLY_BOTTLENECKS.ceilings.length - 1) * 1.3, demandH, btZ);
+  btG.add(demandLine);
+  addLabel('需求 21.1GW —', btX0 - 2.6, demandH, btZ, 0.4);
+  addLabel('⚠ 2026E 供给瓶颈：各环节产能上限 (GW)', btX0 + 6.5, demandH + 2.2, btZ, 0.5);
+  levelGroup.add(btG);
+  makePickable(btG, 'zone:bottleneck');
+
   // ---- 流动脉冲：电流（黄）与冷却水（红/蓝）----
   addFlow([[-40, 0.7, 20], [-32, 0.7, 20], [-26, 0.7, 20], [-20, 0.7, 20],
            [-14, 0.7, 20], [-7, 0.7, 20], [-1, 0.7, 20], [-4, 0.7, 15.3]],
@@ -722,6 +781,32 @@ function buildNVL72Rack() {
   // 抽出托盘的指示标签
   addLabel('计算托盘（抽出示意，双击进入）→', 1.85, 3.02, 0.6, 0.26);
   addLabel('NVSwitch 托盘 →', 1.4, 1.55, 0.5, 0.26);
+
+  // 人形比例尺：机柜 2236mm = 3.6 世界单位 → 1m ≈ 1.61（贴机柜左侧站，与柜同深）
+  addHuman(-1.55, 0, 1.61);
+
+  // 价值量 X 光条：移到机柜左前方独立空间，避免和存储幽灵柜重叠
+  // GB200 口径：GPU+CPU 在计算托盘里 $2.64M、存储 $0.83M、scale-up $0.29M、电源 $44K、液冷 $51K
+  const moneyItems = [
+    { label: 'GPU+CPU $2.64M', frac: 1.0,  color: 0xd4a017, y: 2.3 },
+    { label: '存储 $0.83M',    frac: 0.32, color: 0x0e7490, y: 1.95 },
+    { label: 'Scale-up $0.29M', frac: 0.11, color: 0xb87333, y: 1.6 },
+    { label: '液冷 $51K',      frac: 0.04, color: 0x2563eb, y: 1.25 },
+    { label: '电源 $44K',      frac: 0.035, color: 0x9ca3af, y: 0.9 },
+  ];
+  const MAXW = 1.5;
+  const MB_X = -4.6, MB_Z = 2.0;
+  moneyItems.forEach(it => {
+    const w = Math.max(MAXW * it.frac, 0.05);
+    const bar = new THREE.Mesh(
+      new THREE.BoxGeometry(w, 0.12, 0.05),
+      new THREE.MeshStandardMaterial({ color: it.color, emissive: it.color, emissiveIntensity: 0.35, roughness: 0.5 })
+    );
+    bar.position.set(MB_X + w / 2, it.y, MB_Z);
+    levelGroup.add(bar);
+    addLabel(it.label, MB_X + MAXW + 0.55, it.y, MB_Z, 0.16);
+  });
+  addLabel('钱都在哪（GB200 BOM）', MB_X + 1.0, 2.75, MB_Z, 0.2);
 
   // 直流母排：后部中央垂直铜排
   const busbar = new THREE.Group();
@@ -1226,7 +1311,7 @@ function buildCluster() {
 // 电链路 几十cm → 数cm → 毫米，1.6T 端口 30W → 9W
 // ============================================================
 function buildOptics() {
-  setPose([0, 11.5, 13], [0, 0, -1.2]);
+  setPose([0, 12.5, 15], [0, 0, 0.4]);
   setLegend([
     ['#d4a017', '交换 ASIC / DSP / ELS'], ['#06b6d4', '硅光引擎'], ['#16a34a', 'Driver/TIA'],
     ['#b91c1c', '长电链路（高损耗）'], ['#67e8f9', '光纤'],
@@ -1432,6 +1517,27 @@ function buildOptics() {
 
   // 底部演进箭头
   addLabel('—— 光电转换位置向 ASIC 前移 · 电链路 几十cm → 毫米 ——→', 0, 0.3, 2.6, 0.55);
+
+  // 功耗对比条：每方案正下方一根竖条，高度 ∝ 1.6T 端口功耗（z 推远避免遮挡演进箭头文字）
+  // 可插拔 30W / LPO ~18W(按-40%) / NPO ~14W(估) / CPO 9W
+  const powerBars = [
+    { x: -7.8, w: 30, label: '30W', color: 0xb91c1c },
+    { x: -2.6, w: 18, label: '~18W', color: 0xd97706 },
+    { x: 2.6,  w: 14, label: '~14W', color: 0xeab308 },
+    { x: 7.8,  w: 9,  label: '9W', color: 0x16a34a },
+  ];
+  const barH = w => w / 30 * 1.6;
+  powerBars.forEach(b => {
+    const h = barH(b.w);
+    const bar = new THREE.Mesh(
+      new THREE.BoxGeometry(0.45, h, 0.45),
+      new THREE.MeshStandardMaterial({ color: b.color, emissive: b.color, emissiveIntensity: 0.3, roughness: 0.5 })
+    );
+    bar.position.set(b.x, h / 2 + 0.02, 5.2);
+    levelGroup.add(bar);
+    addLabel(b.label, b.x, h + 0.35, 5.2, 0.38);
+  });
+  addLabel('1.6T 端口功耗对比（LPO/NPO 为估算）', 0, -0.5, 5.2, 0.4);
 }
 
 // ============================================================
